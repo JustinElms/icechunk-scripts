@@ -1,0 +1,12 @@
+{
+    "name":"giops_day",
+    "data_path_root": "/data/hpfx.collab.science.gc.ca/",
+    "data_path_template": "/data/hpfx.collab.science.gc.ca/{forecast_date}/WXO-DD/model_giops/netcdf/lat_lon/3d/{forecast_run}/{forecast_time}/*{variable}*.nc",
+    "dims": ["time", "depth", "latitude", "longitude"],
+    "variables": ["vomecrty", "votemper", "vosaline", "vozocrtx"],
+    "drop_vars":["latitude_longitude"],
+    "model_runs": ["00","12"],
+    "frequency": 24,
+    "n_times": 10,
+    "reference_time": "1950-01-01 00:00:00"
+}
