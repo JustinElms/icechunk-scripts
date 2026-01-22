@@ -1,4 +1,3 @@
-import itertools
 import glob
 import json
 from datetime import datetime, timedelta
@@ -16,6 +15,8 @@ from icechunk import (
     ManifestSplitCondition,
     ManifestSplittingConfig,
     ManifestSplitDimCondition,
+    ConflictError,
+    ForkSession,
 )
 
 
@@ -26,8 +27,8 @@ class ic_manager:
         self.log_file = "ic_log.txt"
 
         self.dataset_key = dataset_key
-
         self.dataset_config = self.__read_config()
+        self.nc_files = []
 
         storage_config = self.__get_storage()
 
@@ -76,9 +77,12 @@ class ic_manager:
             config = json.load(f)
         return config
 
-    def get_forecast_dates(self, start_date: str) -> list:
+    def get_forecast_dates(self, start_date: str, end_date: str | None = None) -> list:
         date = datetime.strptime(start_date, "%Y%m%d")
-        end = datetime.strptime(datetime.today(), "%Y%m%d")
+        if not end_date:
+            end = datetime.now()
+        else:
+            end = datetime.strptime(end_date, "%Y%m%d")
 
         forecast_dates = []
         while date <= end:
@@ -87,12 +91,128 @@ class ic_manager:
 
         return [datetime.strftime(fd, "%Y%m%d") for fd in forecast_dates]
 
-    def init_repo_data(self, start_date: str, end_date: str | None = None) -> None:
+    def calculate_chunk_size(self, variable: xr.DataArray, target_size: int) -> tuple:
         """
-        Gets an array of inputs containing timestamp, model_run, variable, file_path
-        for each file to be written to the icechunk repository. If a timestamp is
-        already present in the repository, the mode is set to 'r+' to overwrite the
-        previous data. Only use for "best estimate" datasets.
+        Calculates a chunk size smaller than target_size for the given variable.
+
+        args:
+            variable - an xarray DataArray for the selected variable
+            target_size - the maximum chunk size in Mb
+
+        returns:
+
+        """
+        chunks = [variable[d].size for d in variable.dims]
+        size = np.prod(chunks) * np.dtype(variable.dtype).itemsize / 1e6
+
+        dim_idx = len(chunks) - 1
+        while size > target_size:
+            new_chunks = chunks
+            new_chunks[dim_idx] = int(new_chunks[dim_idx] / 2)
+            dim_idx -= 1
+            if dim_idx < 1:
+                dim_idx = len(chunks) - 1
+
+            size = np.prod(new_chunks) * np.dtype(variable.dtype).itemsize / 1e6
+
+            if size < 1:
+                break
+            else:
+                chunks = new_chunks
+
+        return tuple(chunks)
+
+    def create_branch(self, branch_id: str) -> None:
+        branches = list(self.repo.list_branches())
+        if branch_id in branches:
+            return
+        snap_id = self.repo.lookup_branch("main")
+        self.repo.create_branch(branch_id, snapshot_id=snap_id)
+
+    def delete_branch(self, branch_id: str) -> None:
+        self.repo.delete_branch(branch_id)
+
+    def init_repo_data(self, nc_files: list, timestamp: int) -> None:
+
+        if len(list(self.repo.ancestry(branch="main"))) > 1:
+            print("Repository already initialized")
+            return False
+
+        encoding = {}
+        with xr.open_mfdataset(nc_files).drop_vars(
+            self.dataset_config["drop_vars"]
+        ) as ds:
+            for var in ds.data_vars:
+                chunks = self.calculate_chunk_size(ds[var], 50)
+                encoding[var] = {"chunks": chunks}
+                ds[var] = ds[var].chunk(chunks)
+
+            session = self.repo.writable_session("main")
+            ds.to_zarr(
+                session.store,
+                compute=False,
+                encoding=encoding,
+                mode="w",
+                consolidated=False,
+            )
+
+        session.commit(f"Initialized repo with data from timestamps {timestamp}")
+        return True
+
+    def get_datastore_nc_files(self) -> np.array:
+        """
+        Gets all netcdf files in the datastore using dataset data_path_template.
+        """
+
+        nc_files = glob.glob(
+            self.dataset_config["data_path_template"].format(
+                forecast_date="*",
+                forecast_run="*",
+                forecast_time="*",
+                forecast_variable="*",
+            )
+        )
+
+        return self.nc_file_path_fcst_info(nc_files)
+
+    def nc_file_path_fcst_info(self, nc_files: list) -> np.array:
+        """
+        Parses netcdf file names for forecast metadata using data_path_template.
+        """
+        pts = [f.split("/") for f in nc_files]
+        template_pts = self.dataset_config["data_path_template"].split("/")
+        template_fields = [
+            "forecast_date",
+            "forecast_run",
+            "forecast_time",
+            "forecast_variable",
+        ]
+        field_keys = {}
+        for f in template_fields:
+            for i, p in enumerate(template_pts):
+                if f in p:
+                    field_keys[f] = i
+
+        fcst_info = []
+        for i, p in enumerate(pts):
+            v = [
+                v
+                for v in self.dataset_config["variables"]
+                if v in p[field_keys["forecast_variable"]].lower()
+            ][0]
+            fcst_info.append(
+                [*[p[f] for f in list(field_keys.values())[:-1]], v, nc_files[i]]
+            )
+
+        return np.array(fcst_info)
+
+    def init_nc_file_data(
+        self, start_date: str | None = None, end_date: str | None = None
+    ) -> None:
+        """
+        Generate an array of forcast metadata and file paths for each file in the
+        datastore. Can be filtered to a specific period with optional start_date
+        and end_date args.
 
         Args:
             start_date: the date of the initial forecast to be added to the repo
@@ -102,42 +222,16 @@ class ic_manager:
             list: a list of inputs that can be passed to write_timestamp formatted
                 for multiprocessing
         """
-        forecast_dates = self.get_forecast_dates(start_date, end_date)
-        fc_times = np.arange(
-            0,
-            self.dataset_config["end_hour"] + 1,
-            self.dataset_config["frequency"],
-        )
 
-        input_df = list(
-            itertools.product(
-                [None],
-                forecast_dates,
-                self.dataset_config["model_runs"],
-                [f"{ft:03d}" for ft in fc_times],
-                [None],
-                self.dataset_config["variables"],
-                self.dataset_config["drop_vars"],
-                ["a"],
-                ["time"],
-                [None],
-                [None],
-            )
-        )
+        file_info = self.get_datastore_nc_files()
 
         input_df = pd.DataFrame(
-            input_df,
+            file_info,
             columns=[
-                "timestamp",
                 "forecast_date",
                 "forecast_run",
                 "forecast_time",
-                "datetime",
                 "variable",
-                "drop_vars",
-                "mode",
-                "append_dim",
-                "region",
                 "file",
             ],
         )
@@ -146,6 +240,16 @@ class ic_manager:
             input_df["forecast_date"], format="%Y%m%d"
         )
 
+        # filter forecast data by given dates
+        if start_date:
+            start_date = datetime.strptime(start_date, "%Y%m%d")
+            input_df = input_df[input_df["datetime"] >= start_date]
+
+        if end_date:
+            end_date = datetime.strptime(end_date, "%Y%m%d")
+            input_df = input_df[input_df["datetime"] <= end_date]
+
+        # calculate timestamps
         input_df["datetime"] = input_df["datetime"] + pd.to_timedelta(
             input_df["forecast_time"].astype(int).values, unit="hours"
         )
@@ -168,103 +272,32 @@ class ic_manager:
         ).reset_index(drop=True)
 
         # only keep most recent timestamp for each variable
-        for ts in input_df["timestamp"].unique():
-            for var in self.dataset_config["variables"]:
-                temp_df = input_df[
-                    (input_df["timestamp"] == ts) & (input_df["variable"] == var)
-                ].copy()
-                temp_df = temp_df[::-1]
+        input_df.drop_duplicates(
+            subset=["timestamp", "variable"], keep="last", inplace=True
+        )
 
-                for idx, row in temp_df.iterrows():
-                    nc_files = glob.glob(
-                        self.dataset_config["data_path_template"].format(
-                            forecast_date=row["forecast_date"],
-                            forecast_run=row["forecast_run"],
-                            forecast_time=row["forecast_time"],
-                            variable=row["variable"],
-                        )
-                    )
+        ts_file_counts = input_df.groupby(["timestamp"])["file"].transform("size")
+        input_df = input_df[(ts_file_counts == len(self.dataset_config["variables"]))]
 
-                    if len(nc_files) > 0:
-                        temp_df.loc[idx, "file"] = nc_files[0]
-                        break
-                ts_idx = temp_df.index
-                file_idx = temp_df["file"].last_valid_index()
-                if file_idx is None:
-                    file_idx = ts_idx[-1]
-                else:
-                    input_df.loc[file_idx, "file"] = nc_files[0]
-                ts_idx = ts_idx[ts_idx != file_idx]
-                input_df.drop(ts_idx, inplace=True)
+        return input_df
 
-        # remove timestamps with missing forecast data
-        # TODO add logging for fcts with missing data
-        counts = input_df.groupby(["forecast_date", "forecast_run", "forecast_time"])[
-            "timestamp"
-        ].transform("size")
-        input_df = input_df[
-            (counts == len(self.dataset_config["variables"]))
-            & (input_df["file"].notnull())
-        ]
-
-        import pickle
-        with open("giops_2d_df.pkl","wb") as f:
-            pickle.dump(input_df,f)
-
-        # determine which timestamps need to be updated
-        written_timestamps = self.get_repo_timestamps()
-        if len(written_timestamps) == 0:
-            df_idx = input_df[
-                (input_df["forecast_date"] == input_df["forecast_date"].min())
-                & (input_df["forecast_run"] == input_df["forecast_run"].min())
-                & (input_df["forecast_time"] == input_df["forecast_time"].min())
-            ].index
-
-            if all(
-                input_df.loc[df_idx, "variable"].values
-                == self.dataset_config["variables"]
-            ):
-                input_df.loc[df_idx, "append_dim"] = None
-        else:
-            for idx, ts in enumerate(written_timestamps):
-                region = self.dataset_config["dims_size"]
-                region = {key: slice(0, value) for key, value in region.items()}
-                region["time"] = slice(idx, idx + 1)
-                df_idx = input_df[input_df["timestamp"] == ts].index
-                input_df.loc[df_idx, "mode"] = "r+"
-                input_df.loc[df_idx, "append_dim"] = None
-                for i in df_idx:
-                    input_df.at[i, "region"] = region
-
-        # Group output data by write type
-        write_df = input_df.loc[
-            (input_df["mode"] == "a") & (input_df["append_dim"].isnull())
-        ]
-        update_df = input_df.loc[(input_df["mode"] == "r+")]
-        append_df = input_df.loc[
-            (input_df["mode"] == "a") & (input_df["append_dim"].notnull())
-        ]
-
-        groups = [write_df, update_df, append_df]
-
-        input_df = pd.concat(groups)
-
-        inputs = []
-        timestamps = input_df["timestamp"].unique()
-        for ts in timestamps:
-            temp_df = input_df.loc[input_df["timestamp"] == ts].drop(
-                columns=[
-                    "forecast_date",
-                    "forecast_run",
-                    "forecast_time",
-                    "timestamp",
-                    "variable",
-                    "datetime",
-                ]
+    @staticmethod
+    def append_timestamp(
+        *, nc_file: str, drop_vars: list, append_dim: str = None, session: ForkSession
+    ) -> None:
+        print(f"Writing {nc_file}")
+        ds = xr.open_mfdataset(nc_file, decode_times=False).drop_vars(drop_vars)
+        if append_dim:
+            ds.to_zarr(
+                session.store,
+                mode="a",
+                append_dim=append_dim,
+                consolidated=False,
+                align_chunks=True,
             )
-            inputs.append(temp_df.values.tolist())
-
-        return inputs
+        else:
+            ds.to_zarr(session.store, mode="a", consolidated=False, align_chunks=True)
+        return session
 
     @staticmethod
     def write_timestamp(args) -> None:
@@ -277,3 +310,27 @@ class ic_manager:
             else:
                 to_icechunk(ds, session, mode=mode)
         return session
+
+    @staticmethod
+    def write_timestamp_uncoop(args) -> None:
+        drop_vars, mode, append_dim, region, file, repo = args
+        print(f"Processing file {file}")
+        while True:
+            try:
+                session = repo.writable_session("main")
+                with xr.open_dataset(file, decode_times=False).drop_vars(
+                    drop_vars
+                ) as ds:
+                    if mode == "r+":
+                        to_icechunk(ds, session, mode=mode, region=region)
+                    elif append_dim:
+                        to_icechunk(ds, session, mode=mode, append_dim=append_dim)
+                    else:
+                        to_icechunk(ds, session, mode=mode)
+                session.commit(f"Wrote file {file}")
+                print(f"Wrote file {file}")
+                break
+            except ConflictError as e:
+                print(e)
+                print(f"Conflict for {file}, retrying")
+                pass

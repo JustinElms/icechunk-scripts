@@ -1,0 +1,14 @@
+{
+    "name":"riops_fc_2dps",
+    "data_path_root": "/data/hpfx.collab.science.gc.ca/",
+    "data_path_template": "/data/hpfx.collab.science.gc.ca/{forecast_date}/WXO-DD/model_riops/netcdf/forecast/polar_stereographic/2d/{forecast_run}/{forecast_time}/*{forecast_variable}*.nc",
+    "dims": ["time", "depth", "latitude", "longitude"],
+    "dims_size": {"time":1, "latitude":1610, "longitude":1770},
+    "variables": ["vozocrtx", "vomecrty", "votemper", "vosaline", "sossheig", "iiceconc", "iicevol", "somixhgt", "sokaraml", "iicesurftemp", "isnowvol", "itmecrty", "itzocrtx", "iicestrength", "iicepressure", "iicedivergence","iiceshear"],    
+    "drop_vars":["polar_stereographic"],
+    "model_runs": ["00","10","12","18"],
+    "time_quantum": "hour",
+    "frequency": 1,
+    "end_hour":84,
+    "reference_time": "1950-01-01 00:00:00"
+}

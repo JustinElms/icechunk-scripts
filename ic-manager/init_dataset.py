@@ -1,61 +1,89 @@
 import argparse
-import itertools
+import gc
+import os
+import pickle
+import psutil
 import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor
-from datetime import datetime, timedelta
-
-import numpy as np
 
 import ic_manager
 
-N_PROCS = 4
+N_PROC = 4
 
 
-def get_date_bounds(start_date: str, end_date: str) -> list:
-    date = datetime.strptime(start_date, "%Y%m%d")
-    end = datetime.strptime(end_date, "%Y%m%d")
-
-    date_bounds = []
-    while date <= end:
-        d0 = date.replace(day=1)
-        d1 = date + timedelta(days=31)
-        d1 = d1.replace(day=1) - timedelta(days=1)
-
-        date_bounds.append(
-            [datetime.strftime(d0, "%Y%m%d"), datetime.strftime(d1, "%Y%m%d")]
-        )
-        date = d1 + timedelta(days=1)
-
-    return date_bounds
+def get_system_memory_info():
+    svmem = psutil.virtual_memory()
+    return {
+        "total": svmem.total / (1024 * 1024),
+        "available": svmem.available / (1024 * 1024),
+        "percent": svmem.percent,
+    }
 
 
 if __name__ == "__main__":
     mp.set_start_method("forkserver")
+    n_procs = os.cpu_count()
 
-    dataset_key = "giops_fc_10d_2dll"
-    start_date = "20240722"
-    end_date = "20250918"
+    dataset_key = "giops_day"
 
     manager = ic_manager.ic_manager(dataset_key)
-    # ingest one month of data at a time
-    date_bounds = get_date_bounds(start_date, end_date)
-    for date_bound in date_bounds:
-        input_groups = manager.init_repo_data(date_bound[0], date_bound[1])
 
-        for input_group in input_groups:
-            file_names = [i[-1] for i in input_group]
-            print(f"Processing files: \n{',\n'.join(file_names)}")
+    pkl_name = f"{dataset_key}_init_data.pkl"
+    if os.path.exists(pkl_name):
+        with open(pkl_name, "rb") as f:
+            nc_file_info = pickle.load(f)
+    else:
+        nc_file_info = manager.init_nc_file_data()
 
-            session = manager.repo.writable_session("main")
-            with ProcessPoolExecutor(max_workers=N_PROCS) as executor:
-                fork = session.fork()
-                input_group = np.append(
-                    input_group,
-                    np.repeat(fork, len(input_group)).reshape((len(input_group), 1)),
-                    axis=1,
+        with open(pkl_name, "wb") as f:
+            pickle.dump(nc_file_info, f)
+
+    timestamps = nc_file_info["timestamp"].unique()
+
+    initialized = manager.init_repo_data(
+        nc_file_info.loc[nc_file_info["timestamp"] == timestamps[0], "file"], timestamps[0]
+    )
+
+    drop_vars = manager.dataset_config.get("drop_vars")
+
+    repo_timestamps = manager.get_repo_timestamps()
+
+    for timestamp in timestamps:
+        if timestamp in repo_timestamps:
+            continue
+        except_count = 0
+        ts_data = nc_file_info.loc[nc_file_info["timestamp"] == timestamp, "file"]
+        append_dim = "time"
+        if timestamp == timestamps[0] and initialized:
+            append_dim = None
+        while True:
+            print(get_system_memory_info())
+            try:
+                session = manager.repo.writable_session("main")
+                with ProcessPoolExecutor() as executor:
+                    fork = session.fork()
+                    futures = [
+                        executor.submit(
+                            manager.append_timestamp,
+                            nc_file=f,
+                            drop_vars=drop_vars,
+                            append_dim=append_dim,
+                            session=fork,
+                        )
+                        for f in ts_data.values
+                    ]
+
+                    remote_sessions = [f.result() for f in futures]
+
+                session.merge(*remote_sessions)
+                session.commit(f"Wrote {len(ts_data)} files from timestamp {timestamp}")
+                nc_file_info.drop(ts_data.index, inplace=True)
+                break
+            except Exception as e:
+                print(
+                    f"Could not write {len(ts_data)} files from timestamp {timestamp}, retrying."
                 )
-                remote_sessions = executor.map(manager.write_timestamp, input_group)
-
-            session.merge(*remote_sessions)
-            session.commit(f"Wrote files: {', '.join(file_names)}")
-            print(f"Wrote files: \n{',\n'.join(file_names)}")
+                print(e)
+                print(gc.collect())
+                pass
+        print(f"Wrote files: \n{',\n'.join(ts_data.values)}")
