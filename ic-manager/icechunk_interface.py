@@ -17,10 +17,16 @@ from icechunk import (
     ManifestSplitDimCondition,
     ConflictError,
     ForkSession,
+    VirtualChunkContainer,
+    local_filesystem_store,
 )
+from obstore.store import LocalStore
+from virtualizarr import open_virtual_mfdataset
+from virtualizarr.parsers import HDFParser
+from virtualizarr.registry import ObjectStoreRegistry
 
 
-class ic_manager:
+class IcechunkInterface:
 
     def __init__(self, dataset_key: str) -> None:
         self.configs_dir = "/home/ubuntu/icechunk/ic-configs"
@@ -45,10 +51,16 @@ class ic_manager:
             repo_config = RepositoryConfig(
                 manifest=ManifestConfig(splitting=split_config),
             )
+            virtual_config = VirtualChunkContainer(
+                url_prefix="file:///data/", store=local_filesystem_store(path="/data/")
+            )
+            repo_config.set_virtual_chunk_container(virtual_config)
             self.repo = Repository.create(storage_config, config=repo_config)
             self.repo.save_config()
         else:
-            self.repo = Repository.open(storage_config)
+            self.repo = Repository.open(
+                storage_config, authorize_virtual_chunk_access={"file:///data/": None}
+            )
 
     def __get_storage(self) -> s3_storage:
         return s3_storage(
@@ -132,7 +144,17 @@ class ic_manager:
     def delete_branch(self, branch_id: str) -> None:
         self.repo.delete_branch(branch_id)
 
-    def init_repo_data(self, nc_files: list, timestamp: int) -> None:
+    def init_repo_zarr(self, nc_files: list | pd.Series, timestamp: int) -> bool:
+        """
+        Initializes repository with data in nc_files.
+
+        args:
+            nc_files - A list or pandas series of NetCDF files
+            timestamp - The initial timestamp of the new repo
+
+        returns:
+            False if repo has already been initialized, True if not
+        """
 
         if len(list(self.repo.ancestry(branch="main"))) > 1:
             print("Repository already initialized")
@@ -155,6 +177,38 @@ class ic_manager:
                 mode="w",
                 consolidated=False,
             )
+
+        session.commit(f"Initialized repo with data from timestamps {timestamp}")
+        return True
+
+    def init_repo_virtual(self, nc_files: list | pd.Series, timestamp: int) -> bool:
+        """
+        Initializes repository as virtual dataset with data in nc_files.
+
+        args:
+            nc_files - A list or pandas series of NetCDF files
+            timestamp - The initial timestamp of the new repo
+
+        returns:
+            False if repo has already been initialized, True if not
+        """
+
+        if len(list(self.repo.ancestry(branch="main"))) > 1:
+            print("Repository already initialized")
+            return False
+
+        file_urls = [f"file://{nc_file}" for nc_file in nc_files]
+        store = LocalStore(prefix="/data/")
+        registry = ObjectStoreRegistry({file_url: store for file_url in file_urls})
+
+        with open_virtual_mfdataset(
+            urls=file_urls,
+            parser=HDFParser(),
+            registry=registry,
+            drop_variables=self.dataset_config["drop_vars"],
+        ) as vds:
+            session = self.repo.writable_session("main")
+            vds.virtualize.to_icechunk(session.store)
 
         session.commit(f"Initialized repo with data from timestamps {timestamp}")
         return True

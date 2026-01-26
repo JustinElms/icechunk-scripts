@@ -1,4 +1,3 @@
-import argparse
 import gc
 import os
 import pickle
@@ -40,7 +39,7 @@ if __name__ == "__main__":
 
     timestamps = nc_file_info["timestamp"].unique()
 
-    initialized = interface.init_repo_zarr(
+    initialized = interface.init_repo_virtual(
         nc_file_info.loc[nc_file_info["timestamp"] == timestamps[0], "file"], timestamps[0]
     )
 
