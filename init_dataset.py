@@ -1,6 +1,6 @@
 import argparse
 
-from ic_interface.icechunk_interface import IcechunkInterface
+from icechunk_interface import IcechunkInterface
 
 
 def init_ic_repo(dataset_key: str) -> None:
