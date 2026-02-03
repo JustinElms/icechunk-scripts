@@ -37,14 +37,16 @@ warnings.filterwarnings(
 class IcechunkInterface:
 
     def __init__(self, dataset_key: str) -> None:
-        self.configs_dir = "/home/ubuntu/icechunk/ic-configs"
-        self.log_file = "ic_log.txt"
+        ic_config = self.__read_config("ic_config.json")
 
-        self.dataset_key = dataset_key
-        self.dataset_config = self.__read_config()
-        self.nc_files = []
+        self.dataset_configs_dir = ic_config.get("dataset_configs_dir")
+        self.log_file = ic_config.get("log_file")
 
-        storage_config = self.__get_storage()
+        self.dataset_config = self.__read_config(
+            f"{self.dataset_configs_dir}/{dataset_key}.json"
+        )
+
+        storage_config = self.__get_storage(dataset_key, ic_config.get("s3_config"))
 
         if not Repository.exists(storage_config):
             split_config = ManifestSplittingConfig.from_dict(
@@ -72,19 +74,19 @@ class IcechunkInterface:
 
         self.initialized = len(list(self.repo.ancestry(branch="main"))) > 1
 
-    def __get_storage(self) -> s3_storage:
+    def __get_storage(self, dataset_key, s3_config) -> s3_storage:
         return s3_storage(
-            bucket="icechunk",
-            prefix=self.dataset_key,
-            access_key_id="admin",
-            secret_access_key="password",
-            endpoint_url="http://142.130.249.35:9000",
+            bucket=s3_config.get("bucket"),
+            prefix=dataset_key,
+            access_key_id=s3_config.get("user"),
+            secret_access_key=s3_config.get("password"),
+            endpoint_url=s3_config.get("url"),
             allow_http=True,
             force_path_style=True,
         )
 
-    def __read_config(self) -> dict:
-        with open(f"{self.configs_dir}/{self.dataset_key}.json", "r") as f:
+    def __read_config(self, path: str) -> dict:
+        with open(path, "r") as f:
             config = json.load(f)
         return config
 

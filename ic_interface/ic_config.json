@@ -1,0 +1,10 @@
+{
+    "dataset_configs_dir": "/home/ubuntu/icechunk/dataset-configs",
+    "log_file": "/home/ubuntu/icechunk/log.text",
+    "s3_config": {
+        "bucket": "icechunk",
+        "user": "admin",
+        "password": "password",
+        "url": "http://142.130.249.35:9000"
+    }
+}
