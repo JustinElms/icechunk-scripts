@@ -1,29 +1,37 @@
 import glob
 import json
-from datetime import datetime, timedelta
+import warnings
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 import zarr
-from icechunk.xarray import to_icechunk
-from icechunk import (
-    Repository,
-    RepositoryConfig,
-    s3_storage,
-    ManifestConfig,
-    ManifestSplitCondition,
-    ManifestSplittingConfig,
-    ManifestSplitDimCondition,
-    ConflictError,
-    ForkSession,
-    VirtualChunkContainer,
-    local_filesystem_store,
-)
 from obstore.store import LocalStore
 from virtualizarr import open_virtual_mfdataset
 from virtualizarr.parsers import HDFParser
 from virtualizarr.registry import ObjectStoreRegistry
+
+from icechunk import (
+    ForkSession,
+    ManifestConfig,
+    ManifestSplitCondition,
+    ManifestSplittingConfig,
+    ManifestSplitDimCondition,
+    Repository,
+    RepositoryConfig,
+    Session,
+    VirtualChunkContainer,
+    VirtualChunkSpec,
+    local_filesystem_store,
+    s3_storage,
+)
+
+warnings.filterwarnings(
+    "ignore",
+    message="Numcodecs codecs are not in the Zarr version 3 specification*",
+    category=UserWarning,
+)
 
 
 class IcechunkInterface:
@@ -42,25 +50,27 @@ class IcechunkInterface:
             split_config = ManifestSplittingConfig.from_dict(
                 {
                     ManifestSplitCondition.AnyArray(): {
-                        ManifestSplitDimCondition.DimensionName("time"): int(
-                            10 * 24 / self.dataset_config["frequency"]
-                        )
+                        ManifestSplitDimCondition.DimensionName("time"): 1
                     }
                 }
             )
             repo_config = RepositoryConfig(
                 manifest=ManifestConfig(splitting=split_config),
             )
-            virtual_config = VirtualChunkContainer(
+            virtual_container = VirtualChunkContainer(
                 url_prefix="file:///data/", store=local_filesystem_store(path="/data/")
             )
-            repo_config.set_virtual_chunk_container(virtual_config)
+            repo_config = RepositoryConfig()
+            repo_config.set_virtual_chunk_container(virtual_container)
             self.repo = Repository.create(storage_config, config=repo_config)
             self.repo.save_config()
+
         else:
             self.repo = Repository.open(
                 storage_config, authorize_virtual_chunk_access={"file:///data/": None}
             )
+
+        self.initialized = len(list(self.repo.ancestry(branch="main"))) > 1
 
     def __get_storage(self) -> s3_storage:
         return s3_storage(
@@ -73,6 +83,11 @@ class IcechunkInterface:
             force_path_style=True,
         )
 
+    def __read_config(self) -> dict:
+        with open(f"{self.configs_dir}/{self.dataset_key}.json", "r") as f:
+            config = json.load(f)
+        return config
+
     def get_repo_timestamps(self) -> np.ndarray:
         session = self.repo.readonly_session("main")
         try:
@@ -84,56 +99,6 @@ class IcechunkInterface:
             timestamps = []
         return timestamps
 
-    def __read_config(self) -> dict:
-        with open(f"{self.configs_dir}/{self.dataset_key}.json", "r") as f:
-            config = json.load(f)
-        return config
-
-    def get_forecast_dates(self, start_date: str, end_date: str | None = None) -> list:
-        date = datetime.strptime(start_date, "%Y%m%d")
-        if not end_date:
-            end = datetime.now()
-        else:
-            end = datetime.strptime(end_date, "%Y%m%d")
-
-        forecast_dates = []
-        while date <= end:
-            forecast_dates.append(date)
-            date += timedelta(days=1)
-
-        return [datetime.strftime(fd, "%Y%m%d") for fd in forecast_dates]
-
-    def calculate_chunk_size(self, variable: xr.DataArray, target_size: int) -> tuple:
-        """
-        Calculates a chunk size smaller than target_size for the given variable.
-
-        args:
-            variable - an xarray DataArray for the selected variable
-            target_size - the maximum chunk size in Mb
-
-        returns:
-
-        """
-        chunks = [variable[d].size for d in variable.dims]
-        size = np.prod(chunks) * np.dtype(variable.dtype).itemsize / 1e6
-
-        dim_idx = len(chunks) - 1
-        while size > target_size:
-            new_chunks = chunks
-            new_chunks[dim_idx] = int(new_chunks[dim_idx] / 2)
-            dim_idx -= 1
-            if dim_idx < 1:
-                dim_idx = len(chunks) - 1
-
-            size = np.prod(new_chunks) * np.dtype(variable.dtype).itemsize / 1e6
-
-            if size < 1:
-                break
-            else:
-                chunks = new_chunks
-
-        return tuple(chunks)
-
     def create_branch(self, branch_id: str) -> None:
         branches = list(self.repo.list_branches())
         if branch_id in branches:
@@ -143,75 +108,6 @@ class IcechunkInterface:
 
     def delete_branch(self, branch_id: str) -> None:
         self.repo.delete_branch(branch_id)
-
-    def init_repo_zarr(self, nc_files: list | pd.Series, timestamp: int) -> bool:
-        """
-        Initializes repository with data in nc_files.
-
-        args:
-            nc_files - A list or pandas series of NetCDF files
-            timestamp - The initial timestamp of the new repo
-
-        returns:
-            False if repo has already been initialized, True if not
-        """
-
-        if len(list(self.repo.ancestry(branch="main"))) > 1:
-            print("Repository already initialized")
-            return False
-
-        encoding = {}
-        with xr.open_mfdataset(nc_files).drop_vars(
-            self.dataset_config["drop_vars"]
-        ) as ds:
-            for var in ds.data_vars:
-                chunks = self.calculate_chunk_size(ds[var], 50)
-                encoding[var] = {"chunks": chunks}
-                ds[var] = ds[var].chunk(chunks)
-
-            session = self.repo.writable_session("main")
-            ds.to_zarr(
-                session.store,
-                compute=False,
-                encoding=encoding,
-                mode="w",
-                consolidated=False,
-            )
-
-        session.commit(f"Initialized repo with data from timestamps {timestamp}")
-        return True
-
-    def init_repo_virtual(self, nc_files: list | pd.Series, timestamp: int) -> bool:
-        """
-        Initializes repository as virtual dataset with data in nc_files.
-
-        args:
-            nc_files - A list or pandas series of NetCDF files
-            timestamp - The initial timestamp of the new repo
-
-        returns:
-            False if repo has already been initialized, True if not
-        """
-
-        if len(list(self.repo.ancestry(branch="main"))) > 1:
-            print("Repository already initialized")
-            return False
-
-        file_urls = [f"file://{nc_file}" for nc_file in nc_files]
-        store = LocalStore(prefix="/data/")
-        registry = ObjectStoreRegistry({file_url: store for file_url in file_urls})
-
-        with open_virtual_mfdataset(
-            urls=file_urls,
-            parser=HDFParser(),
-            registry=registry,
-            drop_variables=self.dataset_config["drop_vars"],
-        ) as vds:
-            session = self.repo.writable_session("main")
-            vds.virtualize.to_icechunk(session.store)
-
-        session.commit(f"Initialized repo with data from timestamps {timestamp}")
-        return True
 
     def get_datastore_nc_files(self) -> np.array:
         """
@@ -228,6 +124,16 @@ class IcechunkInterface:
         )
 
         return self.nc_file_path_fcst_info(nc_files)
+
+    def get_timestamp_index(self, timestamp: int, repo_timestamps: list) -> int | None:
+
+        time_chunk_index = None
+
+        idx = np.argwhere(repo_timestamps == timestamp).flatten()
+        if len(idx) > 0:
+            time_chunk_index = int(idx[0])
+
+        return time_chunk_index
 
     def nc_file_path_fcst_info(self, nc_files: list) -> np.array:
         """
@@ -333,58 +239,56 @@ class IcechunkInterface:
         ts_file_counts = input_df.groupby(["timestamp"])["file"].transform("size")
         input_df = input_df[(ts_file_counts == len(self.dataset_config["variables"]))]
 
+        repo_timestamps = self.get_repo_timestamps()
+        input_df["time_chunk_index"] = input_df["timestamp"].apply(
+            lambda ts: self.get_timestamp_index(ts, repo_timestamps)
+        )
+
         return input_df
 
     @staticmethod
-    def append_timestamp(
-        *, nc_file: str, drop_vars: list, append_dim: str = None, session: ForkSession
+    def write_repo_data(
+        *,
+        session: Session | ForkSession,
+        nc_files: list,
+        drop_vars=[],
+        time_chunk_index: int | None = None,
+        append_dim="time",
     ) -> None:
-        print(f"Writing {nc_file}")
-        ds = xr.open_mfdataset(nc_file, decode_times=False).drop_vars(drop_vars)
-        if append_dim:
-            ds.to_zarr(
-                session.store,
-                mode="a",
-                append_dim=append_dim,
-                consolidated=False,
-                align_chunks=True,
-            )
-        else:
-            ds.to_zarr(session.store, mode="a", consolidated=False, align_chunks=True)
-        return session
+        """
+        Initializes repository as virtual dataset with data in nc_files.
 
-    @staticmethod
-    def write_timestamp(args) -> None:
-        drop_vars, mode, append_dim, region, file, session = args
-        with xr.open_dataset(file, decode_times=False).drop_vars(drop_vars) as ds:
-            if mode == "r+":
-                to_icechunk(ds, session, mode=mode, region=region)
+        args:
+            nc_files - A Pandas Dataframe containing NetCDF files and metadata.
+            append_dim - Dimension to append new data along. Set to "time" by default.
+                        Setting to None will initialze or overwrite repo data.
+
+        returns:
+            None
+        """
+
+        file_urls = [f"file://{file}" for file in nc_files]
+        store = LocalStore(prefix="/data/")
+        registry = ObjectStoreRegistry({file_url: store for file_url in file_urls})
+
+        with open_virtual_mfdataset(
+            urls=file_urls,
+            parser=HDFParser(),
+            registry=registry,
+            drop_variables=drop_vars,
+            compat="override",
+        ) as vds:
+            if time_chunk_index is not None and not np.isnan(time_chunk_index):
+                for var in vds.data_vars:
+                    chunks = []
+                    for manifest_idx, spec in vds.votemper.data.manifest.dict().items():
+                        index = list(map(int, manifest_idx.split(".")))
+                        index[0] = int(time_chunk_index)
+                        chunks.append(VirtualChunkSpec(index, *spec.values()))
+                    session.store.set_virtual_refs(var, chunks)
             elif append_dim:
-                to_icechunk(ds, session, mode=mode, append_dim=append_dim)
+                vds.virtualize.to_icechunk(session.store, append_dim=append_dim)
             else:
-                to_icechunk(ds, session, mode=mode)
-        return session
+                vds.virtualize.to_icechunk(session.store)
 
-    @staticmethod
-    def write_timestamp_uncoop(args) -> None:
-        drop_vars, mode, append_dim, region, file, repo = args
-        print(f"Processing file {file}")
-        while True:
-            try:
-                session = repo.writable_session("main")
-                with xr.open_dataset(file, decode_times=False).drop_vars(
-                    drop_vars
-                ) as ds:
-                    if mode == "r+":
-                        to_icechunk(ds, session, mode=mode, region=region)
-                    elif append_dim:
-                        to_icechunk(ds, session, mode=mode, append_dim=append_dim)
-                    else:
-                        to_icechunk(ds, session, mode=mode)
-                session.commit(f"Wrote file {file}")
-                print(f"Wrote file {file}")
-                break
-            except ConflictError as e:
-                print(e)
-                print(f"Conflict for {file}, retrying")
-                pass
+        return session
