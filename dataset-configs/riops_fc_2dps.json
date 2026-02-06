@@ -1,26 +1,31 @@
 {
     "name": "riops_fc_2dps",
     "data_path_template": "/data/hpfx.collab.science.gc.ca/{forecast_date}/WXO-DD/model_riops/netcdf/forecast/polar_stereographic/2d/{forecast_run}/{forecast_time}/*{variable}*.nc",
-    "template_keys":["forecast_date","forecast_run","forecast_time","variable"],
-    "variables": [
-        "vozocrtx",
-        "vomecrty",
-        "votemper",
-        "vosaline",
-        "sossheig",
-        "iiceconc",
-        "iicevol",
-        "somixhgt",
-        "sokaraml",
-        "iicesurftemp",
-        "isnowvol",
-        "itmecrty",
-        "itzocrtx",
-        "iicestrength",
-        "iicepressure",
-        "iicedivergence",
-        "iiceshear"
+    "template_keys": [
+        "forecast_date",
+        "forecast_run",
+        "forecast_time",
+        "variable"
     ],
+    "variable_map": {
+        "vozocrtx": "vozocrtx",
+        "vomecrty": "vomecrty",
+        "votemper": "votemper",
+        "vosaline": "vosaline",
+        "sossheig": "sossheig",
+        "iiceconc": "iiceconc",
+        "iicevol": "iicevol",
+        "somixhgt": "somixhgt",
+        "sokaraml": "sokaraml",
+        "iicesurftemp": "iicesurftemp",
+        "isnowvol": "isnowvol",
+        "itmecrty": "itmecrty",
+        "itzocrtx": "itzocrtx",
+        "iicestrength": "iicestrength",
+        "iicepressure": "iicepressure",
+        "iicedivergence": "iicedivergence",
+        "iiceshear": "iiceshear"
+    },
     "drop_vars": [
         "polar_stereographic"
     ],
@@ -30,6 +35,5 @@
         "12",
         "18"
     ],
-    "frequency": 1,
-    "reference_time": "1950-01-01 00:00:00"
+    "time_dim_units": "seconds since 1950-01-01 00:00:00"
 }

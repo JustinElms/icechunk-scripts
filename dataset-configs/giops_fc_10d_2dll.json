@@ -1,26 +1,31 @@
 {
     "name": "giops_fc_10d_2dll",
     "data_path_template": "/data/hpfx.collab.science.gc.ca/{forecast_date}/WXO-DD/model_giops/netcdf/lat_lon/2d/{forecast_run}/{forecast_time}/CMC_giops_{variable}_*.nc",
-    "template_keys":["forecast_date","forecast_run","forecast_time","variable"],
-    "variables": [
-        "vozocrtx",
-        "vomecrty",
-        "votemper",
-        "vosaline",
-        "sossheig",
-        "iiceconc",
-        "iicevol",
-        "somixhgt",
-        "sokaraml",
-        "iicesurftemp",
-        "isnowvol",
-        "itmecrty",
-        "itzocrtx",
-        "iicestrength",
-        "iicepressure",
-        "iicedivergence",
-        "iiceshear"
+    "template_keys": [
+        "forecast_date",
+        "forecast_run",
+        "forecast_time",
+        "variable"
     ],
+    "variables": {
+        "vozocrtx": "vozocrtx",
+        "vomecrty": "vomecrty",
+        "votemper": "votemper",
+        "vosaline": "vosaline",
+        "sossheig": "sossheig",
+        "iiceconc": "iiceconc",
+        "iicevol": "iicevol",
+        "somixhgt": "somixhgt",
+        "sokaraml": "sokaraml",
+        "iicesurftemp": "iicesurftemp",
+        "isnowvol": "isnowvol",
+        "itmecrty": "itmecrty",
+        "itzocrtx": "itzocrtx",
+        "iicestrength": "iicestrength",
+        "iicepressure": "iicepressure",
+        "iicedivergence": "iicedivergence",
+        "iiceshear": "iiceshear"
+    },
     "drop_vars": [
         "latitude_longitude"
     ],
@@ -28,6 +33,5 @@
         "00",
         "12"
     ],
-    "frequency": 3,
-    "reference_time": "1950-01-01 00:00:00"
+    "time_dim_units": "seconds since 1950-01-01 00:00:00"
 }

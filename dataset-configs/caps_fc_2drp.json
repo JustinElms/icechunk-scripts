@@ -1,0 +1,42 @@
+{
+    "name": "caps_fc_2drp",
+    "data_path_template": "/data/hpfx.collab.science.gc.ca/{forecast_date}/WXO-DD/model_caps/3km/{forecast_run}/{forecast_time}/*_MSC_CAPS_{variable}_*.nc",
+    "path_filters": [
+        "_DBS-all_"
+    ],
+    "template_keys": [
+        "forecast_date",
+        "forecast_run",
+        "forecast_time",
+        "variable"
+    ],
+    "variable_map": {
+        "MixedLayerThickness": "sokaraml",
+        "SeaSurfaceHeight": "sossheig",
+        "SeaIceAreaFraction": "iiceconc",
+        "SeaWaterSalinity": "vosaline",
+        "SeaIceCompressiveStrength": "iicestrength",
+        "SeaIceDivergence": "iicedivergence",
+        "SeaWaterTemp": "votemper",
+        "SeaIceInternalPressure": "iicepressure",
+        "SeaIceShear": "iiceshear",
+        "SeaWaterVelocityX": "vozocrtx",
+        "SeaIceSnowTemp": "iicesurftemp",
+        "SeaIceSnowVolume": "isnowvol",
+        "SeaWaterVelocityY": "vomecrty",
+        "SeaIceVelocityX": "itzocrtx",
+        "SeaIceVelocityY": "itmecrty",
+        "TurboclineDepth": "somixhgt",
+        "SeaIceVolume": "iicevol"
+    },
+    "drop_vars": [
+        "rotated_pole"
+    ],
+    "model_runs": [
+        "00",
+        "10",
+        "12",
+        "18"
+    ],
+    "time_dim_units": "seconds since 1950-01-01 00:00:00"
+}

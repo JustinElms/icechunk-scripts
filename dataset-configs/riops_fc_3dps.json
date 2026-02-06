@@ -1,13 +1,18 @@
 {
     "name": "riops_fc_3dps",
     "data_path_template": "/data/hpfx.collab.science.gc.ca/{forecast_date}/WXO-DD/model_riops/netcdf/forecast/polar_stereographic/3d/{forecast_run}/{forecast_time}/*{variable}*.nc",
-    "template_keys":["forecast_date","forecast_run","forecast_time","variable"],
-    "variables": [
-        "vomecrty",
-        "votemper",
-        "vosaline",
-        "vozocrtx"
+    "template_keys": [
+        "forecast_date",
+        "forecast_run",
+        "forecast_time",
+        "variable"
     ],
+    "variable_map": {
+        "vomecrty": "vomecrty",
+        "votemper": "votemper",
+        "vosaline": "vosaline",
+        "vozocrtx": "vozocrtx"
+    },
     "drop_vars": [
         "polar_stereographic"
     ],
@@ -17,6 +22,5 @@
         "12",
         "18"
     ],
-    "frequency": 1,
-    "reference_time": "1950-01-01 00:00:00"
+    "time_dim_units": "seconds since 1950-01-01 00:00:00"
 }
