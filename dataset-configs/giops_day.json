@@ -1,14 +1,20 @@
 {
-    "name":"giops_day",
-    "data_path_root": "/data/hpfx.collab.science.gc.ca/",
-    "data_path_template": "/data/hpfx.collab.science.gc.ca/{forecast_date}/WXO-DD/model_giops/netcdf/lat_lon/3d/{forecast_run}/{forecast_time}/*{forecast_variable}*.nc",
-    "dims": ["time", "depth", "latitude", "longitude"],
-    "dims_size": {"time":1, "depth":50, "latitude":850, "longitude":1800},
-    "variables": ["vomecrty", "votemper", "vosaline", "vozocrtx"],
-    "drop_vars":["latitude_longitude"],
-    "model_runs": ["00","12"],
-    "time_quantum": "day",
+    "name": "giops_day",
+    "data_path_template": "/data/hpfx.collab.science.gc.ca/{forecast_date}/WXO-DD/model_giops/netcdf/lat_lon/3d/{forecast_run}/{forecast_time}/CMC_giops_{variable}_depth_all_*.nc",
+    "template_keys":["forecast_date","forecast_run","forecast_time","variable"],
+    "variables": [
+        "vomecrty",
+        "votemper",
+        "vosaline",
+        "vozocrtx"
+    ],
+    "drop_vars": [
+        "latitude_longitude"
+    ],
+    "model_runs": [
+        "00",
+        "12"
+    ],
     "frequency": 24,
-    "end_hour":240,
     "reference_time": "1950-01-01 00:00:00"
 }

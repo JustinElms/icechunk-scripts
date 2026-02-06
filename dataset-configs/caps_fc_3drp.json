@@ -1,6 +1,6 @@
 {
-    "name": "riops_fc_3dps",
-    "data_path_template": "/data/hpfx.collab.science.gc.ca/{forecast_date}/WXO-DD/model_riops/netcdf/forecast/polar_stereographic/3d/{forecast_run}/{forecast_time}/*{variable}*.nc",
+    "name": "caps_fc_3drp",
+    "data_path_template": "/data/hpfx.collab.science.gc.ca/{forecast_date}/WXO-DD/model_riops/netcdf/forecast/polar_stereographic/3d/{forecast_run}/{forecast_time}/20260206T00Z_MSC_CAPS_{variable}_*.nc",
     "template_keys":["forecast_date","forecast_run","forecast_time","variable"],
     "variables": [
         "vomecrty",
@@ -9,7 +9,7 @@
         "vozocrtx"
     ],
     "drop_vars": [
-        "polar_stereographic"
+        "rotated_pole"
     ],
     "model_runs": [
         "00",

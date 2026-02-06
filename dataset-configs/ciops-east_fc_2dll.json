@@ -1,0 +1,57 @@
+{
+    "name": "ciops-east_fc_2dll",
+    "data_path_template": "/data/hpfx.collab.science.gc.ca/{forecast_date}/WXO-DD/model_ciops/east/2km/{forecast_run}/{forecast_time}/*_MSC_CIOPS-East_{variable}_*.nc",
+    "template_keys":["forecast_date","forecast_run","forecast_time","variable"],
+    "path_filters": [
+        "_DBS-all_"
+    ],
+    "variables": [
+        "vozocrtx",
+        "vomecrty",
+        "votemper",
+        "vosaline",
+        "sossheig",
+        "iiceconc",
+        "iicevol",
+        "somixhgt",
+        "sokaraml",
+        "iicesurftemp",
+        "isnowvol",
+        "itmecrty",
+        "itzocrtx",
+        "iicestrength",
+        "iicepressure",
+        "iicedivergence",
+        "iiceshear"
+    ],
+    "variable_map": {
+        "vozocrtx": "SeaWaterVelocityX",
+        "vomecrty": "SeaWaterVelocityY",
+        "votemper": "SeaWaterPotentialTemp",
+        "vosaline": "SeaWaterSalinity",
+        "sossheig": "SeaSfcHeight",
+        "iiceconc": "SeaIceAreaFraction",
+        "iicevol": "SeaIceVol",
+        "somixhgt": "TurboclineDepth",
+        "sokaraml": "MixedLayerThickness",
+        "iicesurftemp": "SeaIceSnowTemp",
+        "isnowvol": "SeaIceSnowVol",
+        "itmecrty": "SeaIceVelocityY",
+        "itzocrtx": "SeaIceVelocityX",
+        "iicestrength": "SeaIceCompressiveStrength",
+        "iicepressure": "SeaIceInternalPressure",
+        "iicedivergence": "SeaIceDivergence",
+        "iiceshear": "SeaIceShear"
+    },
+    "drop_vars": [
+        "latitude_longitude"
+    ],
+    "model_runs": [
+        "00",
+        "10",
+        "12",
+        "18"
+    ],
+    "frequency": 1,
+    "reference_time": "1950-01-01 00:00:00"
+}

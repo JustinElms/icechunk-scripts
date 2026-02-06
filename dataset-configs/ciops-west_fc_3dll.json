@@ -1,0 +1,28 @@
+{
+    "name": "ciops-west_fc_3dll",
+    "data_path_template": "/data/hpfx.collab.science.gc.ca/{forecast_date}/WXO-DD/model_ciops/west/2km/{forecast_run}/{forecast_time}/*{variable}_DBS-all_*.nc",
+    "template_keys":["forecast_date","forecast_run","forecast_time","variable"],
+    "variables": [
+        "vomecrty",
+        "votemper",
+        "vosaline",
+        "vozocrtx"
+    ],
+    "variable_map": {
+        "vomecrty": "SeaWaterSalinity",
+        "votemper": "SeaWaterPotentialTemp",
+        "vosaline": "SeaWaterVelocityY",
+        "vozocrtx": "SeaWaterVelocityX"
+    },
+    "drop_vars": [
+        "latitude_longitude"
+    ],
+    "model_runs": [
+        "00",
+        "10",
+        "12",
+        "18"
+    ],
+    "frequency": 1,
+    "reference_time": "1950-01-01 00:00:00"
+}
