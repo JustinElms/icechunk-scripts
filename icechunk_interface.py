@@ -9,7 +9,7 @@ import xarray as xr
 import zarr
 from obstore.store import LocalStore
 from virtualizarr import open_virtual_mfdataset
-from virtualizarr.parsers import HDFParser
+from virtualizarr.parsers import HDFParser, NetCDF3Parser
 from virtualizarr.registry import ObjectStoreRegistry
 
 from icechunk import (
@@ -33,17 +33,20 @@ warnings.filterwarnings(
     category=UserWarning,
 )
 
+# TODO:
+# - Determine actual chunk locations when overwritting instead of assuming
+# - Add support for latest forecast datasets
+# - Add functionality to remove data (e.g. timestamps older than 2 yrs)
+
 
 class IcechunkInterface:
 
     def __init__(self, dataset_key: str) -> None:
         ic_config = self.__read_config("ic_config.json")
 
-        self.dataset_configs_dir = ic_config.get("dataset_configs_dir")
         self.log_file = ic_config.get("log_file")
-
         self.dataset_config = self.__read_config(
-            f"{self.dataset_configs_dir}/{dataset_key}.json"
+            f"{ic_config.get("dataset_configs_dir")}/{dataset_key}.json"
         )
 
         storage_config = self.__get_storage(dataset_key, ic_config.get("s3_config"))
@@ -116,16 +119,19 @@ class IcechunkInterface:
         Gets all netcdf files in the datastore using dataset data_path_template.
         """
 
+        template_keys = self.dataset_config["template_keys"]
+
         nc_files = glob.glob(
             self.dataset_config["data_path_template"].format(
-                forecast_date="*",
-                forecast_run="*",
-                forecast_time="*",
-                forecast_variable="*",
+                **{k: "*" for k in template_keys}
             )
         )
 
-        return self.nc_file_path_fcst_info(nc_files)
+        filter_keys = self.dataset_config.get("path_filters")
+        if filter_keys:
+            nc_files = [f for f in nc_files if all([k not in f for k in filter_keys])]
+
+        return nc_files
 
     def get_timestamp_index(self, timestamp: int, repo_timestamps: list) -> int | None:
 
@@ -137,46 +143,63 @@ class IcechunkInterface:
 
         return time_chunk_index
 
-    def nc_file_path_fcst_info(self, nc_files: list) -> np.array:
+    def nc_file_path_fcst_info(self, nc_files: list) -> pd.DataFrame:
         """
         Parses netcdf file names for forecast metadata using data_path_template.
-        """
-        pts = [f.split("/") for f in nc_files]
-        template_pts = self.dataset_config["data_path_template"].split("/")
-        template_fields = [
-            "forecast_date",
-            "forecast_run",
-            "forecast_time",
-            "forecast_variable",
-        ]
-        field_keys = {}
-        for f in template_fields:
-            for i, p in enumerate(template_pts):
-                if f in p:
-                    field_keys[f] = i
-
-        fcst_info = []
-        for i, p in enumerate(pts):
-            v = [
-                v
-                for v in self.dataset_config["variables"]
-                if v in p[field_keys["forecast_variable"]].lower()
-            ][0]
-            fcst_info.append(
-                [*[p[f] for f in list(field_keys.values())[:-1]], v, nc_files[i]]
-            )
-
-        return np.array(fcst_info)
-
-    def init_nc_file_data(
-        self, start_date: str | None = None, end_date: str | None = None
-    ) -> None:
-        """
-        Generate an array of forcast metadata and file paths for each file in the
-        datastore. Can be filtered to a specific period with optional start_date
-        and end_date args.
 
         Args:
+            nc_files: a list of NetCDF files to process.
+
+        Returns:
+            pd.DataFrame: a datafame of NetCDF files and metadata parsed from the dataset's
+                    path template keys.
+        """
+
+        path_template = (
+            self.dataset_config["data_path_template"]
+            .replace("*.nc", "")
+            .replace("*.grib", "")
+        )
+        template_keys = self.dataset_config["template_keys"]
+
+        nc_pts = np.array([f.split("/") for f in nc_files])
+        template_pts = np.array(path_template.split("/"))
+
+        field_keys = {}
+        for key in template_keys:
+            for key_idx, t_pt in enumerate(template_pts):
+                if key in t_pt:
+                    field_keys[key] = key_idx
+                    key = "{" + key + "}"
+                    if len(template_pts[key_idx]) > len(key):
+                        bounds = t_pt.split(key)
+                        for nc_idx, nc_pt in enumerate(nc_pts[:, key_idx]):
+                            i_0 = nc_pt.find(bounds[0]) + len(bounds[0])
+                            nc_pt = nc_pt[i_0:]
+                            i_1 = nc_pt.find(bounds[1])
+                            nc_pts[nc_idx, key_idx] = nc_pt[:i_1]
+
+        nc_df = pd.DataFrame()
+        for key, key_idx in field_keys.items():
+            nc_df[key] = nc_pts[:, key_idx]
+        nc_df["file"] = nc_files
+
+        return nc_df
+
+    def get_nc_file_info(
+        self,
+        nc_files: list | None = [],
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> pd.DataFrame:
+        """
+        Generate an array of forcast metadata and file paths for a list of NetCDF files
+        or for each file in the datastore. Can be filtered to a specific period with
+        optional start_date and end_date args.
+
+        Args:
+            nc_files: a list of NetCDF files to process. This will process all files in
+                    the datastore if not provided.
             start_date: the date of the initial forecast to be added to the repo
             end_date: the date of the last forecast to be added to the repo
 
@@ -185,66 +208,66 @@ class IcechunkInterface:
                 for multiprocessing
         """
 
-        file_info = self.get_datastore_nc_files()
+        if len(nc_files) == 0:
+            nc_files = self.get_datastore_nc_files()
 
-        input_df = pd.DataFrame(
-            file_info,
-            columns=[
-                "forecast_date",
-                "forecast_run",
-                "forecast_time",
-                "variable",
-                "file",
-            ],
-        )
+        input_df = self.nc_file_path_fcst_info(nc_files)
 
-        input_df["datetime"] = pd.to_datetime(
-            input_df["forecast_date"], format="%Y%m%d"
-        )
+        template_keys = self.dataset_config["template_keys"]
 
-        # filter forecast data by given dates
-        if start_date:
-            start_date = datetime.strptime(start_date, "%Y%m%d")
-            input_df = input_df[input_df["datetime"] >= start_date]
-
-        if end_date:
-            end_date = datetime.strptime(end_date, "%Y%m%d")
-            input_df = input_df[input_df["datetime"] <= end_date]
-
-        # calculate timestamps
-        input_df["datetime"] = input_df["datetime"] + pd.to_timedelta(
-            input_df["forecast_time"].astype(int).values, unit="hours"
-        )
-        if self.dataset_config["frequency"] != 24:
-            input_df["datetime"] = input_df["datetime"] + pd.to_timedelta(
-                input_df["forecast_run"].astype(int).values, unit="hours"
+        if self.dataset_config.get("latest_only"):
+            for k in template_keys:
+                if "variable" in k:
+                    continue
+                input_df = input_df.loc[input_df[k] == input_df[k].max()]
+        else:
+            input_df["datetime"] = pd.to_datetime(
+                input_df["forecast_date"], format="%Y%m%d"
             )
-        input_df["timestamp"] = input_df["datetime"] - datetime.strptime(
-            self.dataset_config["reference_time"], "%Y-%m-%d %H:%M:%S"
-        )
-        input_df["timestamp"] = input_df["timestamp"].dt.total_seconds().astype(int)
 
-        input_df = input_df.sort_values(
-            by=[
-                "timestamp",
-                "forecast_date",
-                "forecast_run",
-                "forecast_time",
+            # filter forecast data by given dates
+            if start_date:
+                start_date = datetime.strptime(start_date, "%Y%m%d")
+                input_df = input_df[input_df["datetime"] >= start_date]
+
+            if end_date:
+                end_date = datetime.strptime(end_date, "%Y%m%d")
+                input_df = input_df[input_df["datetime"] <= end_date]
+
+            # calculate timestamps
+            input_df["datetime"] = input_df["datetime"] + pd.to_timedelta(
+                input_df["forecast_time"].astype(int).values, unit="hours"
+            )
+            if self.dataset_config["frequency"] != 24:
+                input_df["datetime"] = input_df["datetime"] + pd.to_timedelta(
+                    input_df["forecast_run"].astype(int).values, unit="hours"
+                )
+            input_df["timestamp"] = input_df["datetime"] - datetime.strptime(
+                self.dataset_config["reference_time"], "%Y-%m-%d %H:%M:%S"
+            )
+            input_df["timestamp"] = input_df["timestamp"].dt.total_seconds().astype(int)
+
+            input_df = input_df.sort_values(
+                by=[
+                    "timestamp",
+                    *template_keys,
+                ]
+            ).reset_index(drop=True)
+
+            # only keep most recent timestamp for each variable
+            input_df.drop_duplicates(
+                subset=["timestamp", "variable"], keep="last", inplace=True
+            )
+
+            ts_file_counts = input_df.groupby(["timestamp"])["file"].transform("size")
+            input_df = input_df[
+                (ts_file_counts == len(self.dataset_config["variables"]))
             ]
-        ).reset_index(drop=True)
 
-        # only keep most recent timestamp for each variable
-        input_df.drop_duplicates(
-            subset=["timestamp", "variable"], keep="last", inplace=True
-        )
-
-        ts_file_counts = input_df.groupby(["timestamp"])["file"].transform("size")
-        input_df = input_df[(ts_file_counts == len(self.dataset_config["variables"]))]
-
-        repo_timestamps = self.get_repo_timestamps()
-        input_df["time_chunk_index"] = input_df["timestamp"].apply(
-            lambda ts: self.get_timestamp_index(ts, repo_timestamps)
-        )
+            repo_timestamps = self.get_repo_timestamps()
+            input_df["time_chunk_index"] = input_df["timestamp"].apply(
+                lambda ts: self.get_timestamp_index(ts, repo_timestamps)
+            )
 
         return input_df
 
@@ -255,7 +278,8 @@ class IcechunkInterface:
         nc_files: list,
         drop_vars=[],
         time_chunk_index: int | None = None,
-        append_dim="time",
+        append_dim: str = "time",
+        parser_type: str = "hdf5",
     ) -> None:
         """
         Initializes repository as virtual dataset with data in nc_files.
@@ -268,6 +292,11 @@ class IcechunkInterface:
         returns:
             None
         """
+        match parser_type:
+            case "hdf5":
+                parser = HDFParser()
+            case "nc3":
+                parser = NetCDF3Parser()
 
         file_urls = [f"file://{file}" for file in nc_files]
         store = LocalStore(prefix="/data/")
@@ -275,7 +304,7 @@ class IcechunkInterface:
 
         with open_virtual_mfdataset(
             urls=file_urls,
-            parser=HDFParser(),
+            parser=parser,
             registry=registry,
             drop_variables=drop_vars,
             compat="override",
