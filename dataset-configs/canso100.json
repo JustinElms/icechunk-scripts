@@ -1,0 +1,19 @@
+{
+    "name": "canso100",
+    "latest_only": true,
+    "data_path_template": "/data/hpfx.collab.science.gc.ca/{forecast_date}/model_pops/canso100/*_canso100_{variable}_sfc_forecast.nc",
+    "template_keys": [
+        "forecast_date",
+        "variable"
+    ],
+    "coordinate_variables":[
+        "time", "lat", "lon"
+    ],
+    "variable_map": {
+        "SeaWaterPotentialTemp": "tos",
+        "SeaWaterVelocity": "vos, uos",
+        "SeaWaterSalinity": "sos"
+    },
+    "time_dim_units": "seconds since 1950-01-01 00:00:00",
+    "parser": "nc3"
+}

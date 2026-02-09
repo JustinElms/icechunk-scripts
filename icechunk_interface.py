@@ -3,6 +3,7 @@ import json
 import warnings
 from datetime import datetime
 
+import cftime
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -34,9 +35,9 @@ warnings.filterwarnings(
 )
 
 # TODO:
-# - Determine actual chunk locations when overwritting instead of assuming
-# - Add support for latest forecast datasets
 # - Add functionality to remove data (e.g. timestamps older than 2 yrs)
+# - Add logging
+# - Add error handling and feedback
 
 
 class IcechunkInterface:
@@ -69,7 +70,6 @@ class IcechunkInterface:
             repo_config.set_virtual_chunk_container(virtual_container)
             self.repo = Repository.create(storage_config, config=repo_config)
             self.repo.save_config()
-
         else:
             self.repo = Repository.open(
                 storage_config, authorize_virtual_chunk_access={"file:///data/": None}
@@ -81,6 +81,7 @@ class IcechunkInterface:
         return s3_storage(
             bucket=s3_config.get("bucket"),
             prefix=dataset_key,
+            region="us-east-1",
             access_key_id=s3_config.get("user"),
             secret_access_key=s3_config.get("password"),
             endpoint_url=s3_config.get("url"),
@@ -104,6 +105,16 @@ class IcechunkInterface:
             timestamps = []
         return timestamps
 
+    def get_time_chunk_map(self) -> np.ndarray:
+        timestamps = self.get_repo_timestamps()
+
+        session = self.repo.readonly_session("main")
+        chunks = session.store.list()
+        time_chunks = [chunk for chunk in chunks if "time/c/" in chunk]
+        time_indexes = [int(tc.replace("time/c/", "")) for tc in time_chunks]
+
+        return {int(ts): i for ts, i in zip(timestamps, time_indexes)}
+
     def create_branch(self, branch_id: str) -> None:
         branches = list(self.repo.list_branches())
         if branch_id in branches:
@@ -114,7 +125,7 @@ class IcechunkInterface:
     def delete_branch(self, branch_id: str) -> None:
         self.repo.delete_branch(branch_id)
 
-    def get_datastore_nc_files(self) -> np.array:
+    def get_dataset_nc_files(self) -> np.array:
         """
         Gets all netcdf files in the datastore using dataset data_path_template.
         """
@@ -151,16 +162,16 @@ class IcechunkInterface:
             nc_files: a list of NetCDF files to process.
 
         Returns:
-            pd.DataFrame: a datafame of NetCDF files and metadata parsed from the dataset's
-                    path template keys.
+            pd.DataFrame: a datafame of NetCDF files and metadata parsed from the
+                    dataset's path template keys.
         """
 
-        path_template = (
-            self.dataset_config["data_path_template"]
-            .replace("*.nc", "")
-            .replace("*.grib", "")
-        )
+        path_template = self.dataset_config["data_path_template"]
+        # Remove file extension and wildcards
+        path_template = path_template.rsplit(".", 1)[0].replace("*", "")
+
         template_keys = self.dataset_config["template_keys"]
+        variable_map = self.dataset_config.get("variable_map")
 
         nc_pts = np.array([f.split("/") for f in nc_files])
         template_pts = np.array(path_template.split("/"))
@@ -182,6 +193,8 @@ class IcechunkInterface:
         nc_df = pd.DataFrame()
         for key, key_idx in field_keys.items():
             nc_df[key] = nc_pts[:, key_idx]
+        if variable_map and "variable" in template_keys:
+            nc_df["variable"] = nc_df["variable"].apply(lambda v: variable_map[v])
         nc_df["file"] = nc_files
 
         return nc_df
@@ -209,9 +222,9 @@ class IcechunkInterface:
         """
 
         if len(nc_files) == 0:
-            nc_files = self.get_datastore_nc_files()
+            nc_files = self.get_dataset_nc_files()
 
-        input_df = self.nc_file_path_fcst_info(nc_files)
+        nc_info = self.nc_file_path_fcst_info(nc_files)
 
         template_keys = self.dataset_config["template_keys"]
 
@@ -219,35 +232,38 @@ class IcechunkInterface:
             for k in template_keys:
                 if "variable" in k:
                     continue
-                input_df = input_df.loc[input_df[k] == input_df[k].max()]
-        else:
-            input_df["datetime"] = pd.to_datetime(
-                input_df["forecast_date"], format="%Y%m%d"
+                nc_info = nc_info.loc[nc_info[k] == nc_info[k].max()]
+        elif "forecast_date" in template_keys:
+            nc_info["datetime"] = pd.to_datetime(
+                nc_info["forecast_date"], format="%Y%m%d"
             )
 
             # filter forecast data by given dates
             if start_date:
                 start_date = datetime.strptime(start_date, "%Y%m%d")
-                input_df = input_df[input_df["datetime"] >= start_date]
+                nc_info = nc_info[nc_info["datetime"] >= start_date]
 
             if end_date:
                 end_date = datetime.strptime(end_date, "%Y%m%d")
-                input_df = input_df[input_df["datetime"] <= end_date]
+                nc_info = nc_info[nc_info["datetime"] <= end_date]
 
             # calculate timestamps
-            input_df["datetime"] = input_df["datetime"] + pd.to_timedelta(
-                input_df["forecast_time"].astype(int).values, unit="hours"
-            )
-            if self.dataset_config["frequency"] != 24:
-                input_df["datetime"] = input_df["datetime"] + pd.to_timedelta(
-                    input_df["forecast_run"].astype(int).values, unit="hours"
+            if "forecast_run" in template_keys:
+                nc_info["datetime"] = nc_info["datetime"] + pd.to_timedelta(
+                    nc_info["forecast_run"].astype(int).values, unit="hours"
                 )
-            input_df["timestamp"] = input_df["datetime"] - datetime.strptime(
-                self.dataset_config["reference_time"], "%Y-%m-%d %H:%M:%S"
-            )
-            input_df["timestamp"] = input_df["timestamp"].dt.total_seconds().astype(int)
 
-            input_df = input_df.sort_values(
+            if "forecast_time" in template_keys:
+                nc_info["datetime"] = nc_info["datetime"] + pd.to_timedelta(
+                    nc_info["forecast_time"].astype(int).values, unit="hours"
+                )
+
+            nc_info["timestamp"] = cftime.date2num(
+                nc_info["datetime"].values.astype(datetime),
+                self.dataset_config["time_dim_units"],
+            )
+
+            nc_info = nc_info.sort_values(
                 by=[
                     "timestamp",
                     *template_keys,
@@ -255,28 +271,29 @@ class IcechunkInterface:
             ).reset_index(drop=True)
 
             # only keep most recent timestamp for each variable
-            input_df.drop_duplicates(
+            nc_info.drop_duplicates(
                 subset=["timestamp", "variable"], keep="last", inplace=True
             )
 
-            ts_file_counts = input_df.groupby(["timestamp"])["file"].transform("size")
-            input_df = input_df[
-                (ts_file_counts == len(self.dataset_config["variables"]))
-            ]
+            ts_file_counts = nc_info.groupby(["timestamp"])["file"].transform("size")
+            if "variable_map" in template_keys:
+                nc_info = nc_info[
+                    (ts_file_counts == len(self.dataset_config["variable_map"]))
+                ]
+            else:
+                nc_info = nc_info[(ts_file_counts == ts_file_counts.max())]
 
-            repo_timestamps = self.get_repo_timestamps()
-            input_df["time_chunk_index"] = input_df["timestamp"].apply(
-                lambda ts: self.get_timestamp_index(ts, repo_timestamps)
-            )
+            time_chunk_map = self.get_time_chunk_map()
+            nc_info["time_chunk_index"] = nc_info["timestamp"].apply(time_chunk_map.get)
 
-        return input_df
+        return nc_info
 
     @staticmethod
     def write_repo_data(
         *,
         session: Session | ForkSession,
-        nc_files: list,
-        drop_vars=[],
+        nc_files: list = [],
+        drop_vars: list = [],
         time_chunk_index: int | None = None,
         append_dim: str = "time",
         parser_type: str = "hdf5",
@@ -285,18 +302,39 @@ class IcechunkInterface:
         Initializes repository as virtual dataset with data in nc_files.
 
         args:
+            session -
             nc_files - A Pandas Dataframe containing NetCDF files and metadata.
             append_dim - Dimension to append new data along. Set to "time" by default.
                         Setting to None will initialze or overwrite repo data.
+            time_chunk_index: int | None = None,
+            append_dim -
+            parser_type -
 
         returns:
-            None
+            session -
         """
         match parser_type:
-            case "hdf5":
-                parser = HDFParser()
             case "nc3":
                 parser = NetCDF3Parser()
+            case _:
+                parser = HDFParser()
+
+        coordinate_variables = [
+            "nav_lat_u",
+            "nav_lon_u",
+            "nav_lat_v",
+            "nav_lon_v",
+            "nav_lat",
+            "nav_lon",
+            "latitude_u",
+            "longitude_u",
+            "latitude_v",
+            "longitude_v",
+            "latitude",
+            "longitude",
+            "lat",
+            "lon",
+        ]
 
         file_urls = [f"file://{file}" for file in nc_files]
         store = LocalStore(prefix="/data/")
@@ -311,12 +349,13 @@ class IcechunkInterface:
         ) as vds:
             if time_chunk_index is not None and not np.isnan(time_chunk_index):
                 for var in vds.data_vars:
-                    chunks = []
-                    for manifest_idx, spec in vds.votemper.data.manifest.dict().items():
-                        index = list(map(int, manifest_idx.split(".")))
-                        index[0] = int(time_chunk_index)
-                        chunks.append(VirtualChunkSpec(index, *spec.values()))
-                    session.store.set_virtual_refs(var, chunks)
+                    if var not in coordinate_variables:
+                        chunks = []
+                        for manifest_idx, spec in vds[var].data.manifest.dict().items():
+                            index = list(map(int, manifest_idx.split(".")))
+                            index[0] = int(time_chunk_index)
+                            chunks.append(VirtualChunkSpec(index, *spec.values()))
+                        session.store.set_virtual_refs(var, chunks)
             elif append_dim:
                 vds.virtualize.to_icechunk(session.store, append_dim=append_dim)
             else:

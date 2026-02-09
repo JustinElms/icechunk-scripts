@@ -16,11 +16,5 @@
     "drop_vars": [
         "latitude_longitude"
     ],
-    "model_runs": [
-        "00",
-        "10",
-        "12",
-        "18"
-    ],
     "time_dim_units": "seconds since 1950-01-01 00:00:00"
 }
