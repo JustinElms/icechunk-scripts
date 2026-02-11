@@ -1,0 +1,44 @@
+{
+    "name": "wcps_2dll",
+    "latest_only": true,
+    "data_path_template": "/data/hpfx.collab.science.gc.ca/{forecast_date}/WXO-DD/model_wcps/ocean-atmosphere/1km/{forecast_run}/{forecast_time}/*_MSC_WCPS_{variable}_*.nc",
+    "path_filters": [
+        "PrecipRate",
+        "PrecipAccum",
+        "RainAccum",
+        "Runoff",
+        "SnowfallAccum"
+    ],
+    "template_keys": [
+        "forecast_date",
+        "forecast_run",
+        "forecast_time",
+        "variable"
+    ],
+    "variable_map": {
+        "AirTemp": "tairsurf",
+        "SeaIceVelocityX": "itzocrtx",
+        "MixedLayerThickness": "sokaraml",
+        "SeaIceVelocityY": "itmecrty",
+        "SeaIceVol": "iicevol",
+        "SeaSfcHeight": "sossheig",
+        "SeaWaterPotentialTemp": "votemper",
+        "SeaWaterSalinity": "vosaline",
+        "SeaIceAreaFraction": "iiceconc",
+        "SeaWaterVelocityX": "vozocrtx",
+        "SeaIceCompressiveStrength": "iicestrength",
+        "SeaWaterVelocityY": "vomecrty",
+        "SeaIceDivergence": "iicedivergence",
+        "SeaIceInternalPressure": "iicepressure",
+        "TurboclineDepth": "somixhgt",
+        "SeaIceShear": "iiceshear",
+        "WindU": "uwindsurf",
+        "SeaIceSnowTemp": "iicesurftemp",
+        "WindV": "vwindsurf",
+        "SeaIceSnowVol": "isnowvol"
+    },
+    "drop_vars": [
+        "latitude_longitude"
+    ],
+    "time_dim_units": "seconds since 1950-01-01 00:00:00"
+}

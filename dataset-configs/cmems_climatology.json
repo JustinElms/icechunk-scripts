@@ -1,0 +1,9 @@
+{
+    "name": "cmems_climatology",
+    "data_path_template": "/data/climatology/glorys12v1/glorys12v1_global_{climatology_date}_annmean.nc",
+    "template_keys": [
+        "climatology_date"
+    ],
+    "drop_vars": [],
+    "time_dim_units": "hours since 1950-01-01"
+}

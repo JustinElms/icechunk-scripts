@@ -1,0 +1,9 @@
+{
+    "name": "cmems_seasonal_climatology",
+    "data_path_template": "/data/climatology/glorys12/seasonal/mercatorglorys12v1_gl12_mean_{climatology_season}-2018.nc",
+    "template_keys": [
+        "climatology_season"
+    ],
+    "drop_vars": [],
+    "time_dim_units": "hours since 1950-01-01"
+}

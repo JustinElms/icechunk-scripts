@@ -1,0 +1,9 @@
+{
+    "name": "cmems_monthly_climatology",
+    "data_path_template": "/data/climatology/glorys12/monthly-20200323/mercatorglorys12v1_gl12_mean_{climatology_month}-2018.nc",
+    "template_keys": [
+        "climatology_month"
+    ],
+    "drop_vars": [],
+    "time_dim_units": "hours since 1950-01-01"
+}

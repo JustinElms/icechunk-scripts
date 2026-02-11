@@ -1,0 +1,11 @@
+{
+    "name": "cmems_monthly",
+    "data_path_template": "/data/my.cmems-du.eu/GLOBAL_MULTIYEAR_PHY_001_030/cmems_mod_glo_phy_*_0.083deg_P1M-m_202311/{reanalysis_year}/mercatorglorys12v1_gl12_mean_{reanalysis_date}.nc",
+    "template_keys": [
+        "reanalysis_year",
+        "reanalysis_month",
+        "reanalysis_date"
+    ],
+    "drop_vars": [],
+    "time_dim_units": "hours since 1950-01-01"
+}
