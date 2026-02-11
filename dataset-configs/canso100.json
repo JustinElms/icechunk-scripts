@@ -6,9 +6,6 @@
         "forecast_date",
         "variable"
     ],
-    "coordinate_variables":[
-        "time", "lat", "lon"
-    ],
     "variable_map": {
         "SeaWaterPotentialTemp": "tos",
         "SeaWaterVelocity": "vos, uos",
