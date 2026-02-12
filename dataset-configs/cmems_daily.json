@@ -1,10 +1,10 @@
 {
     "name": "cmems_daily",
-    "data_path_template": "/data/my.cmems-du.eu/GLOBAL_MULTIYEAR_PHY_001_030/cmems_mod_glo_phy_*_0.083deg_P1D-m_202311/{reanalysis_year}/{reanalysis_month}/mercatorglorys12v1_gl12_mean_{reanalysis_date}_*.nc",
+    "data_path_template": "/data/my.cmems-du.eu/GLOBAL_MULTIYEAR_PHY_001_030/cmems_mod_glo_phy_*_0.083deg_P1D-m_202311/{reanalysis_year}/{reanalysis_month}/mercatorglorys12v1_gl12_mean_{forecast_date}_*.nc",
     "template_keys": [
         "reanalysis_year",
         "reanalysis_month",
-        "reanalysis_date"
+        "forecast_date"
     ],
     "drop_vars": [
     ],
