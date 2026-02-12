@@ -347,8 +347,16 @@ class IcechunkInterface:
             return
 
         if not self.initialized:
-            timestamp = nc_file_info.timestamp.min()
-            ts_data = nc_file_info.loc[nc_file_info["timestamp"] == timestamp]
+            if "timestamp" in nc_file_info.columns:
+                timestamp = nc_file_info.timestamp.min()
+                ts_data = nc_file_info.loc[nc_file_info["timestamp"] == timestamp]
+            else:
+                ts_data = nc_file_info.copy()
+                template_keys = self.dataset_config["template_keys"]
+                for k in template_keys:
+                    if "variable" in k:
+                        continue
+                    ts_data = ts_data.loc[ts_data[k] == ts_data[k].min()]
 
             session = self.repo.writable_session(branch="main")
             session = self.write_repo_data(
