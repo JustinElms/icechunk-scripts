@@ -39,7 +39,7 @@ warnings.filterwarnings(
 # - Add functionality to remove data (e.g. timestamps older than 2 yrs)
 # - Add function to clean up datastore (remove unused files)
 # - Add logging
-# - Add error handling and feedback
+# - Add error handling and other user feedback
 # - Add function to spot check data
 # - Add verification of dataset and ic config file - raise errors for bad or missing
 #   values
@@ -294,13 +294,17 @@ class IcechunkInterface:
 
         return nc_info
 
-    def generate_commit_msg(self, nc_file_info: pd.DataFrame) -> str:
+    def generate_commit_msg(
+        self, nc_file_info: pd.DataFrame, status: str = "success"
+    ) -> str:
         """
         Creates a commit message based on nc_file_info's columns.
 
         Args:
             nc_file_info: A DataFrame containing meta data for the NC files being
                             written.
+            status: Whether the commit was successful, raised on error, or the files
+                    were skipped.
 
         Returns:
             The compiled commit message string.
@@ -310,17 +314,28 @@ class IcechunkInterface:
             if col in ["forecast_date", "forecast_run", "forecast_time"]:
                 msg_info.append(nc_file_info[col].iloc[0])
 
-        commit_msg = "Wrote data from " + " ".join(msg_info) + " forecast."
+        if status == "success":
+            commit_msg = "Wrote data from " + " ".join(msg_info) + " forecast."
+        elif status == "error":
+            commit_msg = (
+                "Could not write data from " + " ".join(msg_info) + " forecast."
+            )
+        elif status == "skip":
+            commit_msg = "Skipped data from " + " ".join(msg_info) + " forecast."
 
         return commit_msg
 
-    def append_to_dataset(self, nc_files: list | None) -> None:
+    def append_to_dataset(
+        self, nc_files: list | None, skip_existing: bool = False
+    ) -> None:
         """
         Adds data from NetCDF data to the dataset repository.
 
         Args:
             nc_files: A list of NetCDF files to be appended. If not provided then all
                     files found in the datastore will be added.
+            skip_existing: If True then files containing timestamps already present in
+                    the repo will be ignored.
 
         Returns:
             None
@@ -346,47 +361,41 @@ class IcechunkInterface:
 
             return
 
-        if not self.initialized:
-            if "timestamp" in nc_file_info.columns:
-                timestamp = nc_file_info.timestamp.min()
-                ts_data = nc_file_info.loc[nc_file_info["timestamp"] == timestamp]
-            else:
-                ts_data = nc_file_info.copy()
-                template_keys = self.dataset_config["template_keys"]
-                for k in template_keys:
-                    if "variable" in k:
-                        continue
-                    ts_data = ts_data.loc[ts_data[k] == ts_data[k].min()]
-
-            session = self.repo.writable_session(branch="main")
-            session = self.write_repo_data(
-                session=session,
-                nc_files=ts_data["file"].values,
-                drop_vars=drop_vars,
-                append_dim=None,
-                parser_type=parser,
-            )
-            session.commit(self.generate_commit_msg(ts_data))
-
-            nc_file_info.drop(ts_data.index, inplace=True)
-
+        initialized = self.initialized
         timestamps = sorted(nc_file_info["timestamp"].unique())
         for timestamp in timestamps:
-            ts_data = nc_file_info.loc[nc_file_info["timestamp"] == timestamp]
+            append_dim = "time"
+            if not initialized:
+                append_dim = None
+                initialized = True
 
-            commit_msg = self.generate_commit_msg(ts_data)
+            ts_data = nc_file_info.loc[nc_file_info["timestamp"] == timestamp]
+            time_chunk_index = ts_data["time_chunk_index"].values[0]
+
+            if (
+                time_chunk_index is not None
+                and not np.isnan(time_chunk_index)
+                and skip_existing
+            ):
+                print(self.generate_commit_msg(ts_data, "skip"))
+                continue
 
             session = self.repo.writable_session(branch="main")
-
-            self.write_repo_data(
-                session=session,
-                nc_files=ts_data["file"].values,
-                drop_vars=drop_vars,
-                time_chunk_index=ts_data["time_chunk_index"].values[0],
-                parser_type=parser,
-            )
-
-            session.commit(commit_msg)
+            try:
+                self.write_repo_data(
+                    session=session,
+                    nc_files=ts_data["file"].values,
+                    drop_vars=drop_vars,
+                    time_chunk_index=time_chunk_index,
+                    append_dim=append_dim,
+                    parser_type=parser,
+                )
+                commit_msg = self.generate_commit_msg(ts_data)
+                session.commit(commit_msg)
+            except Exception as e:
+                print(e)
+                print("*** FAILED ***")
+                commit_msg = self.generate_commit_msg(ts_data, "error")
             print(commit_msg)
 
     @staticmethod
@@ -474,6 +483,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("key", help="The dataset key.", type=str)
     parser.add_argument(
+        "-s",
+        "--skip_existing",
+        action="store_false",
+        help="Skip files that match timestamps in the dataset repo.",
+    )
+    parser.add_argument(
         "-nc",
         "--nc_files",
         help=(
@@ -489,4 +504,4 @@ if __name__ == "__main__":
 
     ic_interface = IcechunkInterface(args.key)
 
-    ic_interface.append_to_dataset(args.nc_files)
+    ic_interface.append_to_dataset(args.nc_files, args.skip_existing)
