@@ -34,6 +34,7 @@ warnings.filterwarnings(
     message="Numcodecs codecs are not in the Zarr version 3 specification*",
     category=UserWarning,
 )
+warnings.filterwarnings("ignore", category=UnstableSpecificationWarning)
 
 # TODO:
 # - Add functionality to remove data (e.g. timestamps older than 2 yrs)
