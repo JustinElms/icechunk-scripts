@@ -6,7 +6,7 @@
         "reanalysis_month",
         "forecast_date"
     ],
-    "drop_vars": [
-    ],
-    "time_dim_units": "hours since 1950-01-01"
+    "drop_vars": [],
+    "time_dim_units": "hours since 1950-01-01",
+    "timestamp_offset": 12
 }

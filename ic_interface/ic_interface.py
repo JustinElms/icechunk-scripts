@@ -115,7 +115,8 @@ class IcechunkInterface:
 
         start_time = datetime.now().isoformat()
 
-        logging.FileHandler(f"{log_path}{dataset_key}_{start_time}.log")
+        file_handler = logging.FileHandler(f"{log_path}{dataset_key}_{start_time}.log")
+        logger.addHandler(file_handler)
 
     def get_repo_timestamps(self) -> np.ndarray:
         session = self.repo.readonly_session("main")
@@ -281,6 +282,11 @@ class IcechunkInterface:
                     nc_info["forecast_time"].astype(int).values, unit="hours"
                 )
 
+            if self.dataset_config.get("timestamp_offset"):
+                nc_info["datetime"] = nc_info["datetime"] + pd.to_timedelta(
+                    self.dataset_config.get("timestamp_offset"), unit="hours"
+                )
+
             nc_info["timestamp"] = cftime.date2num(
                 nc_info["datetime"].values.astype(datetime),
                 self.dataset_config["time_dim_units"],
@@ -322,7 +328,7 @@ class IcechunkInterface:
             nc_file_info: A DataFrame containing meta data for the NC files being
                             written.
             status: Whether the commit was successful, raised on error, or the files
-                    were skipped.
+                    were skipped. Must be "success", "error", or "skip".
 
         Returns:
             The compiled commit message string.
@@ -395,7 +401,7 @@ class IcechunkInterface:
                 and not np.isnan(time_chunk_index)
                 and skip_existing
             ):
-                logging.INFO(self.generate_commit_msg(ts_data, "skip"))
+                logger.info(self.generate_commit_msg(ts_data, "skip"))
                 continue
 
             session = self.repo.writable_session(branch="main")
@@ -409,10 +415,27 @@ class IcechunkInterface:
                     parser_type=parser,
                 )
                 commit_msg = self.generate_commit_msg(ts_data)
-                session.commit(commit_msg)
-                logging.INFO(commit_msg)
-            except Exception:
-                logging.ERROR(self.generate_commit_msg(ts_data, "error"))
+                # session.commit(commit_msg)
+                logger.info(commit_msg)
+            except Exception as e:
+                logger.error(self.generate_commit_msg(ts_data, "error"))
+                logger.error(e)
+
+    def initialize_repo_data(self, nc_file_info: pd.DataFrame) -> pd.DataFrame:
+        timestamp = nc_file_info.timestamp.min()
+        ts_data = nc_file_info.loc[nc_file_info["timestamp"] == timestamp]
+
+        session = ic_interface.repo.writable_session(branch="main")
+        session = ic_interface.write_repo_data(
+            session=session,
+            nc_files=ts_data["file"].values,
+            drop_vars=self.dataset_config.get("drop_vars"),
+            append_dim=None,
+            parser_type=parser,
+        )
+        session.commit(self.generate_commit_msg(ts_data))
+
+        return nc_file_info.drop(ts_data.index)
 
     @staticmethod
     def write_repo_data(
@@ -423,21 +446,23 @@ class IcechunkInterface:
         time_chunk_index: int | None = None,
         append_dim: str = "time",
         parser_type: str = "hdf5",
+        latest_only=False,
     ) -> None:
         """
         Initializes repository as virtual dataset with data in nc_files.
 
         args:
-            session -
-            nc_files - A Pandas Dataframe containing NetCDF files and metadata.
-            append_dim - Dimension to append new data along. Set to "time" by default.
+            session:
+            nc_files: A Pandas Dataframe containing NetCDF files and metadata.
+            append_dim: Dimension to append new data along. Set to "time" by default.
                         Setting to None will initialze or overwrite repo data.
             time_chunk_index: int | None = None,
-            append_dim -
-            parser_type -
+            append_dim:
+            parser_type:
+            latest_only:
 
         returns:
-            session -
+            session:
         """
         match parser_type:
             case "nc3":
@@ -480,13 +505,18 @@ class IcechunkInterface:
                 vds = vds.set_coords(cdv)
 
             if time_chunk_index is not None and not np.isnan(time_chunk_index):
-                for var in vds.data_vars:
+                variables = vds.data_vars
+                if latest_only:
+                    variables.append("time")
+                for variable in variables:
                     chunks = []
-                    for manifest_idx, spec in vds[var].data.manifest.dict().items():
+                    for manifest_idx, spec in (
+                        vds[variable].data.manifest.dict().items()
+                    ):
                         index = list(map(int, manifest_idx.split(".")))
                         index[0] = int(time_chunk_index)
                         chunks.append(VirtualChunkSpec(index, *spec.values()))
-                    session.store.set_virtual_refs(var, chunks)
+                    session.store.set_virtual_refs(variable, chunks)
             elif append_dim:
                 vds.virtualize.to_icechunk(session.store, append_dim=append_dim)
             else:

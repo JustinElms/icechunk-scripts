@@ -1,6 +1,6 @@
 {
     "dataset_configs_dir": "/home/ubuntu/icechunk/dataset-configs",
-    "log_file": "/home/ubuntu/icechunk/log.text",
+    "log_directory": "/home/ubuntu/icechunk/logs/",
     "s3_config": {
         "bucket": "icechunk",
         "user": "admin",
