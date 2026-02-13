@@ -1,6 +1,8 @@
 import argparse
 import glob
 import json
+import logging
+import os
 import warnings
 from datetime import datetime
 
@@ -34,9 +36,7 @@ warnings.filterwarnings(
     message="Numcodecs codecs are not in the Zarr version 3 specification*",
     category=UserWarning,
 )
-warnings.filterwarnings(
-    "ignore", category=zarr.core.dtype.npy.bytes.UnstableSpecificationWarning
-)
+warnings.filterwarnings("ignore", category=zarr.errors.UnstableSpecificationWarning)
 
 # TODO:
 # - Add functionality to remove data (e.g. timestamps older than 2 yrs)
@@ -47,13 +47,20 @@ warnings.filterwarnings(
 # - Add verification of dataset and ic config file - raise errors for bad or missing
 #   values
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s: %(message)s",
+    filemode="w",
+)
+
 
 class IcechunkInterface:
 
     def __init__(self, dataset_key: str) -> None:
         ic_config = self.__read_config("ic_config.json")
 
-        self.log_file = ic_config.get("log_file")
+        self.__configure_log(dataset_key, ic_config.get("log_directory"))
+
         self.dataset_config = self.__read_config(
             f"{ic_config.get("dataset_configs_dir")}/{dataset_key}.json"
         )
@@ -101,6 +108,14 @@ class IcechunkInterface:
         with open(path, "r") as f:
             config = json.load(f)
         return config
+
+    def __configure_log(self, dataset_key: str, log_path: str) -> None:
+
+        os.makedirs(log_path, exist_ok=True)
+
+        start_time = datetime.now().isoformat()
+
+        logging.FileHandler(f"{log_path}{dataset_key}_{start_time}.log")
 
     def get_repo_timestamps(self) -> np.ndarray:
         session = self.repo.readonly_session("main")
@@ -380,7 +395,7 @@ class IcechunkInterface:
                 and not np.isnan(time_chunk_index)
                 and skip_existing
             ):
-                print(self.generate_commit_msg(ts_data, "skip"))
+                logging.INFO(self.generate_commit_msg(ts_data, "skip"))
                 continue
 
             session = self.repo.writable_session(branch="main")
@@ -395,11 +410,9 @@ class IcechunkInterface:
                 )
                 commit_msg = self.generate_commit_msg(ts_data)
                 session.commit(commit_msg)
-            except Exception as e:
-                print(e)
-                print("*** FAILED ***")
-                commit_msg = self.generate_commit_msg(ts_data, "error")
-            print(commit_msg)
+                logging.INFO(commit_msg)
+            except Exception:
+                logging.ERROR(self.generate_commit_msg(ts_data, "error"))
 
     @staticmethod
     def write_repo_data(
