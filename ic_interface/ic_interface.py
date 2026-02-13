@@ -1,7 +1,5 @@
-import argparse
 import glob
 import json
-import logging
 import os
 import warnings
 from datetime import datetime
@@ -17,16 +15,13 @@ from virtualizarr.parsers import HDFParser, NetCDF3Parser
 from virtualizarr.registry import ObjectStoreRegistry
 
 from icechunk import (
-    ForkSession,
     ManifestConfig,
     ManifestSplitCondition,
     ManifestSplittingConfig,
     ManifestSplitDimCondition,
     Repository,
     RepositoryConfig,
-    Session,
     VirtualChunkContainer,
-    VirtualChunkSpec,
     local_filesystem_store,
     s3_storage,
 )
@@ -41,17 +36,10 @@ warnings.filterwarnings("ignore", category=zarr.errors.UnstableSpecificationWarn
 # TODO:
 # - Add functionality to remove data (e.g. timestamps older than 2 yrs)
 # - Add function to clean up datastore (remove unused files)
-# - Add logging
 # - Add error handling and other user feedback
 # - Add function to spot check data
 # - Add verification of dataset and ic config file - raise errors for bad or missing
 #   values
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s: %(message)s",
-    filemode="w",
-)
 
 
 class IcechunkInterface:
@@ -59,7 +47,9 @@ class IcechunkInterface:
     def __init__(self, dataset_key: str) -> None:
         ic_config = self.__read_config("ic_config.json")
 
-        self.__configure_log(dataset_key, ic_config.get("log_directory"))
+        self.log_file = self.__configure_log_file(
+            dataset_key, ic_config.get("log_directory")
+        )
 
         self.dataset_config = self.__read_config(
             f"{ic_config.get("dataset_configs_dir")}/{dataset_key}.json"
@@ -109,14 +99,13 @@ class IcechunkInterface:
             config = json.load(f)
         return config
 
-    def __configure_log(self, dataset_key: str, log_path: str) -> None:
+    def __configure_log_file(self, dataset_key: str, log_path: str) -> None:
 
         os.makedirs(log_path, exist_ok=True)
 
         start_time = datetime.now().isoformat()
 
-        file_handler = logging.FileHandler(f"{log_path}{dataset_key}_{start_time}.log")
-        logger.addHandler(file_handler)
+        return f"{log_path}{dataset_key}_{start_time}.log"
 
     def get_repo_timestamps(self) -> np.ndarray:
         session = self.repo.readonly_session("main")
@@ -349,148 +338,23 @@ class IcechunkInterface:
 
         return commit_msg
 
-    def append_to_dataset(
-        self, nc_files: list | None, skip_existing: bool = False
-    ) -> None:
-        """
-        Adds data from NetCDF data to the dataset repository.
-
-        Args:
-            nc_files: A list of NetCDF files to be appended. If not provided then all
-                    files found in the datastore will be added.
-            skip_existing: If True then files containing timestamps already present in
-                    the repo will be ignored.
-
-        Returns:
-            None
-        """
-        nc_file_info = self.get_nc_file_info(nc_files)
-        drop_vars = self.dataset_config.get("drop_vars")
-        parser = self.dataset_config.get("parser")
-        time_chunk_index = None
-
-        if self.dataset_config.get("latest_only"):
-            session = self.repo.writable_session(branch="main")
-            if self.initialized:
-                time_chunk_index = 0
-            session = self.write_repo_data(
-                session=session,
-                nc_files=nc_file_info["file"].values,
-                drop_vars=drop_vars,
-                time_chunk_index=time_chunk_index,
-                append_dim=None,
-                parser_type=parser,
-            )
-            session.commit(self.generate_commit_msg(nc_file_info))
-
-            return
-
-        initialized = self.initialized
-        timestamps = sorted(nc_file_info["timestamp"].unique())
-        for timestamp in timestamps:
-            append_dim = "time"
-            if not initialized:
-                append_dim = None
-                initialized = True
-
-            ts_data = nc_file_info.loc[nc_file_info["timestamp"] == timestamp]
-            time_chunk_index = ts_data["time_chunk_index"].values[0]
-
-            if (
-                time_chunk_index is not None
-                and not np.isnan(time_chunk_index)
-                and skip_existing
-            ):
-                logger.info(self.generate_commit_msg(ts_data, "skip"))
-                continue
-
-            session = self.repo.writable_session(branch="main")
-            try:
-                self.write_repo_data(
-                    session=session,
-                    nc_files=ts_data["file"].values,
-                    drop_vars=drop_vars,
-                    time_chunk_index=time_chunk_index,
-                    append_dim=append_dim,
-                    parser_type=parser,
-                )
-                commit_msg = self.generate_commit_msg(ts_data)
-                # session.commit(commit_msg)
-                logger.info(commit_msg)
-            except Exception as e:
-                logger.error(self.generate_commit_msg(ts_data, "error"))
-                logger.error(e)
-
     def initialize_repo_data(self, nc_file_info: pd.DataFrame) -> pd.DataFrame:
         timestamp = nc_file_info.timestamp.min()
         ts_data = nc_file_info.loc[nc_file_info["timestamp"] == timestamp]
+        parser_type = self.dataset_config.get("parser")
+        drop_vars = self.dataset_config.get("drop_vars")
 
-        session = ic_interface.repo.writable_session(branch="main")
-        session = ic_interface.write_repo_data(
-            session=session,
-            nc_files=ts_data["file"].values,
-            drop_vars=self.dataset_config.get("drop_vars"),
-            append_dim=None,
-            parser_type=parser,
-        )
-        session.commit(self.generate_commit_msg(ts_data))
-
-        return nc_file_info.drop(ts_data.index)
-
-    @staticmethod
-    def write_repo_data(
-        *,
-        session: Session | ForkSession,
-        nc_files: list = [],
-        drop_vars: list = [],
-        time_chunk_index: int | None = None,
-        append_dim: str = "time",
-        parser_type: str = "hdf5",
-        latest_only=False,
-    ) -> None:
-        """
-        Initializes repository as virtual dataset with data in nc_files.
-
-        args:
-            session:
-            nc_files: A Pandas Dataframe containing NetCDF files and metadata.
-            append_dim: Dimension to append new data along. Set to "time" by default.
-                        Setting to None will initialze or overwrite repo data.
-            time_chunk_index: int | None = None,
-            append_dim:
-            parser_type:
-            latest_only:
-
-        returns:
-            session:
-        """
         match parser_type:
             case "nc3":
                 parser = NetCDF3Parser()
             case _:
                 parser = HDFParser()
 
-        coordinate_variables = [
-            "nav_lat_u",
-            "nav_lon_u",
-            "nav_lat_v",
-            "nav_lon_v",
-            "nav_lat",
-            "nav_lon",
-            "latitude_u",
-            "longitude_u",
-            "latitude_v",
-            "longitude_v",
-            "latitude",
-            "longitude",
-            "lat",
-            "lon",
-        ]
-
-        file_urls = [f"file://{file}" for file in nc_files]
+        file_urls = [f"file://{file}" for file in ts_data["file"].values]
         store = LocalStore(prefix="/data/")
         registry = ObjectStoreRegistry({file_url: store for file_url in file_urls})
 
+        session = self.repo.writable_session(branch="main")
         with open_virtual_mfdataset(
             urls=file_urls,
             parser=parser,
@@ -498,56 +362,7 @@ class IcechunkInterface:
             drop_variables=drop_vars,
             compat="override",
         ) as vds:
+            vds.virtualize.to_icechunk(session.store)
+        session.commit(self.generate_commit_msg(ts_data))
 
-            # check if any coordinates are erroniously included in data variables
-            coord_data_vars = [v for v in vds.data_vars if v in coordinate_variables]
-            for cdv in coord_data_vars:
-                vds = vds.set_coords(cdv)
-
-            if time_chunk_index is not None and not np.isnan(time_chunk_index):
-                variables = vds.data_vars
-                if latest_only:
-                    variables.append("time")
-                for variable in variables:
-                    chunks = []
-                    for manifest_idx, spec in (
-                        vds[variable].data.manifest.dict().items()
-                    ):
-                        index = list(map(int, manifest_idx.split(".")))
-                        index[0] = int(time_chunk_index)
-                        chunks.append(VirtualChunkSpec(index, *spec.values()))
-                    session.store.set_virtual_refs(variable, chunks)
-            elif append_dim:
-                vds.virtualize.to_icechunk(session.store, append_dim=append_dim)
-            else:
-                vds.virtualize.to_icechunk(session.store)
-
-        return session
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("key", help="The dataset key.", type=str)
-    parser.add_argument(
-        "-s",
-        "--skip_existing",
-        action="store_false",
-        help="Skip files that match timestamps in the dataset repo.",
-    )
-    parser.add_argument(
-        "-nc",
-        "--nc_files",
-        help=(
-            "The path to the NetCDF or other format data files to append. If not"
-            "provided this script will  add all files in the datastore to the "
-            "repository."
-        ),
-        nargs="*",
-        default=[],
-        type=str,
-    )
-    args = parser.parse_args()
-
-    ic_interface = IcechunkInterface(args.key)
-
-    ic_interface.append_to_dataset(args.nc_files, args.skip_existing)
+        return nc_file_info.drop(ts_data.index)
