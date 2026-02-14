@@ -45,17 +45,15 @@ warnings.filterwarnings("ignore", category=zarr.errors.UnstableSpecificationWarn
 class IcechunkInterface:
 
     def __init__(self, dataset_key: str) -> None:
-        ic_config = self.__read_config("ic_config.json")
+        self.ic_config = self.__read_config("ic_config.json")
 
-        self.log_file = self.__configure_log_file(
-            dataset_key, ic_config.get("log_directory")
-        )
+        self.log_file = self.__configure_log_file(dataset_key)
 
         self.dataset_config = self.__read_config(
-            f"{ic_config.get("dataset_configs_dir")}/{dataset_key}.json"
+            f"{self.ic_config.get("dataset_configs_dir")}/{dataset_key}.json"
         )
 
-        storage_config = self.__get_storage(dataset_key, ic_config.get("s3_config"))
+        storage_config = self.__get_storage(dataset_key)
 
         if not Repository.exists(storage_config):
             split_config = ManifestSplittingConfig.from_dict(
@@ -82,7 +80,8 @@ class IcechunkInterface:
 
         self.initialized = len(list(self.repo.ancestry(branch="main"))) > 1
 
-    def __get_storage(self, dataset_key, s3_config) -> s3_storage:
+    def __get_storage(self, dataset_key) -> s3_storage:
+        s3_config = self.ic_config.get("s3_config")
         return s3_storage(
             bucket=s3_config.get("bucket"),
             prefix=dataset_key,
@@ -99,7 +98,9 @@ class IcechunkInterface:
             config = json.load(f)
         return config
 
-    def __configure_log_file(self, dataset_key: str, log_path: str) -> None:
+    def __configure_log_file(self, dataset_key: str) -> None:
+
+        log_path = self.ic_config.get("log_directory")
 
         os.makedirs(log_path, exist_ok=True)
 
@@ -301,9 +302,6 @@ class IcechunkInterface:
                 ]
             else:
                 nc_info = nc_info[(ts_file_counts == ts_file_counts.max())]
-
-            time_chunk_map = self.get_time_chunk_map()
-            nc_info["time_chunk_index"] = nc_info["timestamp"].apply(time_chunk_map.get)
 
         return nc_info
 

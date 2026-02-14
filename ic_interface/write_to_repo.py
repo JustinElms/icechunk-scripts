@@ -1,19 +1,6 @@
-import argparse
-import glob
-import json
 import logging
-import multiprocessing as mp
-import os
-import sys
-import warnings
-from concurrent.futures import ProcessPoolExecutor
-from datetime import datetime
 
-import cftime
 import numpy as np
-import pandas as pd
-import xarray as xr
-import zarr
 from obstore.store import LocalStore
 from virtualizarr import open_virtual_mfdataset
 from virtualizarr.parsers import HDFParser, NetCDF3Parser
@@ -21,19 +8,8 @@ from virtualizarr.registry import ObjectStoreRegistry
 
 from icechunk import (
     ConflictError,
-    ForkSession,
-    ManifestConfig,
-    ManifestSplitCondition,
-    ManifestSplittingConfig,
-    ManifestSplitDimCondition,
-    RebaseFailedError,
     Repository,
-    RepositoryConfig,
-    Session,
-    VirtualChunkContainer,
     VirtualChunkSpec,
-    local_filesystem_store,
-    s3_storage,
 )
 
 
@@ -92,45 +68,44 @@ def write_to_repo(
     store = LocalStore(prefix="/data/")
     registry = ObjectStoreRegistry({file_url: store for file_url in file_urls})
 
-    while True:
-        try:
-            session = repo.writable_session("main")
+    with open_virtual_mfdataset(
+        urls=file_urls,
+        parser=parser,
+        registry=registry,
+        drop_variables=drop_vars,
+        compat="override",
+    ) as vds:
 
-            with open_virtual_mfdataset(
-                urls=file_urls,
-                parser=parser,
-                registry=registry,
-                drop_variables=drop_vars,
-                compat="override",
-            ) as vds:
+        # check if any coordinates are erroniously included in data variables
+        coord_data_vars = [v for v in vds.data_vars if v in coordinate_variables]
+        for cdv in coord_data_vars:
+            vds = vds.set_coords(cdv)
 
-                # check if any coordinates are erroniously included in data variables
-                coord_data_vars = [
-                    v for v in vds.data_vars if v in coordinate_variables
-                ]
-                for cdv in coord_data_vars:
-                    vds = vds.set_coords(cdv)
+        chunks = []
+        if time_chunk_index is not None and not np.isnan(time_chunk_index):
+            variables = vds.data_vars
+            if latest_only:
+                variables.append("time")
+            for variable in variables:
+                chunks = []
+                for manifest_idx, spec in (
+                    vds[variable].data.manifest.dict().items()
+                ):
+                    index = list(map(int, manifest_idx.split(".")))
+                    index[0] = int(time_chunk_index)
+                    chunks.append(VirtualChunkSpec(index, *spec.values()))
 
-                if time_chunk_index is not None and not np.isnan(time_chunk_index):
-                    variables = vds.data_vars
-                    if latest_only:
-                        variables.append("time")
-                    for variable in variables:
-                        chunks = []
-                        for manifest_idx, spec in (
-                            vds[variable].data.manifest.dict().items()
-                        ):
-                            index = list(map(int, manifest_idx.split(".")))
-                            index[0] = int(time_chunk_index)
-                            chunks.append(VirtualChunkSpec(index, *spec.values()))
-                        session.store.set_virtual_refs(variable, chunks)
+        while True:
+            try:
+                session = repo.writable_session("main")
+                if len(chunks) > 0:
+                    session.store.set_virtual_refs(variable, chunks)
                 elif append_dim:
                     vds.virtualize.to_icechunk(session.store, append_dim=append_dim)
                 else:
                     vds.virtualize.to_icechunk(session.store)
-
                 session.commit(commit_msg)
                 logger.info(commit_msg)
-                return
-        except ConflictError:
-            pass
+                break
+            except ConflictError:
+                pass

@@ -3,7 +3,7 @@ import logging
 import multiprocessing as mp
 import os
 import sys
-from concurrent.futures import as_completed, ProcessPoolExecutor
+from concurrent.futures import as_completed, process, ProcessPoolExecutor
 from logging.handlers import QueueHandler, QueueListener
 
 from ic_interface import IcechunkInterface
@@ -112,30 +112,53 @@ if __name__ == "__main__":
 
     elif "timestamp" in nc_file_info.columns:
 
-        timestamps = sorted(nc_file_info.timestamp.values)
+        while True:
 
-        with ProcessPoolExecutor(
-            initializer=init_worker, initargs=(log_queue, logging.INFO)
-        ) as executor:
-            futures = []
-            for timestamp in timestamps:
-                ts_data = nc_file_info.loc[nc_file_info.timestamp == timestamp]
-                commit_msg = ic_interface.generate_commit_msg(ts_data)
-                futures.append(
-                    executor.submit(
-                        write_to_repo,
-                        repo=ic_interface.repo,
-                        commit_msg=commit_msg,
-                        nc_files=ts_data.file.values,
-                        drop_vars=[],
-                        time_chunk_index=ts_data.time_chunk_index.values[0],
-                        append_dim="time",
-                        parser_type="hdf5",
-                        latest_only=False,
+            time_chunk_map = ic_interface.get_time_chunk_map()
+            nc_file_info["time_chunk_index"] = nc_file_info["timestamp"].apply(
+                time_chunk_map.get
+            )
+
+            if args.skip_existing:
+                nc_file_info = nc_file_info[nc_file_info["time_chunk_index"].isnull()]
+
+            timestamps = sorted(nc_file_info.timestamp.values)
+
+            with ProcessPoolExecutor(
+                max_workers=4,
+                initializer=init_worker,
+                initargs=(log_queue, logging.INFO),
+            ) as executor:
+                futures = []
+                for timestamp in timestamps:
+                    ts_data = nc_file_info.loc[nc_file_info.timestamp == timestamp]
+                    time_chunk_index = ts_data.time_chunk_index.values[0]
+
+                    commit_msg = ic_interface.generate_commit_msg(ts_data)
+                    futures.append(
+                        executor.submit(
+                            write_to_repo,
+                            repo=ic_interface.repo,
+                            commit_msg=commit_msg,
+                            nc_files=ts_data.file.values,
+                            drop_vars=[],
+                            time_chunk_index=ts_data.time_chunk_index.values[0],
+                            append_dim="time",
+                            parser_type="hdf5",
+                            latest_only=False,
+                        )
                     )
-                )
-            [f.result() for f in futures]
-
+                for future in as_completed(futures):
+                    try:
+                        future.result()
+                        break
+                    except process.BrokenProcessPool:
+                        root_logger.warning("The process pool is broken, restarting.")
+                    except Exception as e:
+                        root_logger.error(
+                            ic_interface.generate_commit_msg(ts_data, "error")
+                        )
+                        root_logger.error(e)
     listener.stop()
     log_queue.close()
     log_queue.join_thread()
